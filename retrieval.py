@@ -10,39 +10,38 @@ from database import milvus_client
 from embedding import processor, model
 from config import COLLECTION_NAME, MILVUS_HOST, MILVUS_PORT
 
-ALIAS = "default" # Use 'default' unless you have a specific reason otherwise
+ALIAS = "default"  # Use 'default' unless you have a specific reason otherwise
 
 # Establish the connection
 try:
-    connections.connect(
-        alias=ALIAS,
-        host=MILVUS_HOST,
-        port=MILVUS_PORT
+    connections.connect(alias=ALIAS, host=MILVUS_HOST, port=MILVUS_PORT)
+    print(
+        f"Successfully connected to Milvus at {MILVUS_HOST}:{MILVUS_PORT} using alias '{ALIAS}'."
     )
-    print(f"Successfully connected to Milvus at {MILVUS_HOST}:{MILVUS_PORT} using alias '{ALIAS}'.")
 
 except Exception as e:
     # Handle the error, perhaps exit the script
     print(f"Failed to connect to Milvus: {e}")
 
+
 def retrieval_with_text(query_text):
     text_inputs = processor(text=query_text, return_tensors="pt")
     with torch.no_grad():
         text_features = model.get_text_features(**text_inputs)
-    
+
     normalized_query = text_features / text_features.norm(p=2, dim=-1, keepdim=True)
 
     print(f"\nSearching Milvus for: '{query_text}'...")
-    
+
     collection = Collection(COLLECTION_NAME)
     collection.load()
-    
+
     search_results = collection.search(
         data=[normalized_query.squeeze().tolist()],
         limit=5,
         output_fields=["video_filepath"],
         anns_field="clip_vector",
-        param={"metric_type": "COSINE"}
+        param={"metric_type": "COSINE"},
     )
 
     print("--- Search Results (Top 1) ---")
@@ -54,50 +53,24 @@ def retrieval_with_text(query_text):
         print(f"Distance (Lower is better): {top_hit['distance']}")
 
 
-def get_demo_sample_image(dest_file_loc):
-    video_file_loc = "/ext-data/datasets/training_lib_KTH/person01_handclapping_d1_uncomp.avi"
-    
-    cap = cv2.VideoCapture(video_file_loc)
-    
-    # Check if video opened successfully
-    if not cap.isOpened():
-        print(f"Error opening video file: {video_file_loc}")
-        return None
-    
-    frame_count = 0
-    
-    while cap.isOpened():
-        ret, frame = cap.read()
-        if not ret:
-            break
-
-        if frame_count == 50:
-            success = cv2.imwrite(dest_file_loc, frame)
-            break
-        
-        frame_count += 1
-
-    cap.release()
-    
-    
 def retrieval_with_image(query_img):
     img_inputs = processor(images=query_img, return_tensors="pt")
     with torch.no_grad():
         img_features = model.get_image_features(**img_inputs)
-    
+
     normalized_query = img_features / img_features.norm(p=2, dim=-1, keepdim=True)
 
     print(f"\nSearching Milvus for: '{query_text}'...")
-    
+
     collection = Collection(COLLECTION_NAME)
     collection.load()
-    
+
     search_results = collection.search(
         data=[normalized_query.squeeze().tolist()],
         limit=5,
         output_fields=["video_filepath"],
         anns_field="clip_vector",
-        param={"metric_type": "COSINE"}
+        param={"metric_type": "COSINE"},
     )
 
     print("--- Search Results (Top 1) ---")
@@ -106,13 +79,14 @@ def retrieval_with_image(query_img):
         top_hit = search_results[0][-1]
         print(f"Video: {top_hit['entity']['video_filepath']}")
         print(f"Distance (Lower is better): {top_hit['distance']}")
-
 
 
 if __name__ == "__main__":
     query_text = "hand clapping"
     retrieval_with_text(query_text)
-    
-    query_img = os.path.join(os.path.dirname(os.path.abspath(__file__)), "./samples/person01_handclapping_d1_uncomp_sample.png")
-    get_demo_sample_image(query_img)
+
+    query_img = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)),
+        "./samples/person01_handclapping_d1_uncomp_sample.png",
+    )
     retrieval_with_image(query_img)
