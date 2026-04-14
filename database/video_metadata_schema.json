@@ -1,0 +1,44 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Video Segment Metadata Schema",
+  "type": "object",
+  "properties": {
+    "segment_id": { "type": "string" },
+    "original_video_id": { "type": "string" },
+    "start_sec": { "type": "number" },
+    "end_sec": { "type": "number" },
+    "scene_env": {
+      "type": "string",
+      "enum": ["indoor", "outdoor", "semi_outdoor"]
+    },
+    "scene_type": {
+      "type": "string",
+      "enum": [
+        "street", "square", "park", "field", "mountain", "forest", "river",
+        "sea", "gym", "office", "classroom", "kitchen", "living_room",
+        "mall", "parking", "underpass", "other"
+      ]
+    },
+    "weather": {
+      "type": "string",
+      "enum": ["sunny", "cloudy", "rainy", "foggy", "snowy", "unknown"]
+    },
+    "lighting": {
+      "type": "string",
+      "enum": ["bright", "normal", "dim", "indoor_light"]
+    },
+    "time_of_day": {
+      "type": "string",
+      "enum": ["dawn", "morning", "noon", "afternoon", "dusk", "night", "unknown"]
+    },
+    "person_count": {
+      "type": "string",
+      "enum": ["0", "single", "few", "crowd"]
+    }
+  },
+  "required": [
+    "video_file_name", "video_file_path", "segment_id", 
+    "scene_env", "scene_type", "weather", "lighting", 
+    "time_of_day", "person_count"
+  ]
+}

@@ -6,9 +6,9 @@ import torch
 
 from pymilvus import connections, Collection
 
-from database import milvus_client
-from embedding import processor, model
-from config import COLLECTION_NAME, MILVUS_HOST, MILVUS_PORT
+from database.milvus_db import milvus_client
+from utils.embedding import processor, model
+from utils.config import COLLECTION_NAME, MILVUS_HOST, MILVUS_PORT
 
 ALIAS = "default"  # Use 'default' unless you have a specific reason otherwise
 
@@ -39,7 +39,7 @@ def retrieval_with_text(query_text):
     search_results = collection.search(
         data=[normalized_query.squeeze().tolist()],
         limit=5,
-        output_fields=["video_filepath"],
+        output_fields=["video_file_path"],
         anns_field="clip_vector",
         param={"metric_type": "COSINE"},
     )
@@ -49,7 +49,7 @@ def retrieval_with_text(query_text):
     if search_results:
         # Note: The search returns distance/shmdb5imilarity, you can filter this.
         top_hit = search_results[0][-1]
-        print(f"Video: {top_hit['entity']['video_filepath']}")
+        print(f"Video: {top_hit['entity']['video_file_path']}")
         print(f"Distance (Lower is better): {top_hit['distance']}")
 
 
@@ -68,7 +68,7 @@ def retrieval_with_image(query_img):
     search_results = collection.search(
         data=[normalized_query.squeeze().tolist()],
         limit=5,
-        output_fields=["video_filepath"],
+        output_fields=["video_file_name", "video_file_path"],
         anns_field="clip_vector",
         param={"metric_type": "COSINE"},
     )
@@ -77,7 +77,7 @@ def retrieval_with_image(query_img):
     if search_results:
         # Note: The search returns distance/shmdb5imilarity, you can filter this.
         top_hit = search_results[0][-1]
-        print(f"Video: {top_hit['entity']['video_filepath']}")
+        print(f"Video: {top_hit['entity']['video_file_name']}")
         print(f"Distance (Lower is better): {top_hit['distance']}")
 
 
