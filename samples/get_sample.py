@@ -3,7 +3,7 @@ import os
 import cv2
 
 
-def get_demo_sample_image(video_file_loc, dest_file_loc):
+def get_demo_sample_image(video_file_loc, time_loc, dest_file_loc):
     cap = cv2.VideoCapture(video_file_loc)
 
     # Check if video opened successfully
@@ -18,7 +18,7 @@ def get_demo_sample_image(video_file_loc, dest_file_loc):
         if not ret:
             break
 
-        if frame_count == 50:
+        if frame_count == time_loc * int(cap.get(cv2.CAP_PROP_FPS)):
             success = cv2.imwrite(dest_file_loc, frame)
             break
 
@@ -29,12 +29,13 @@ def get_demo_sample_image(video_file_loc, dest_file_loc):
 
 if __name__ == "__main__":
     video_file_loc = (
-        "/ext-data/datasets/training_lib_KTH/person01_handclapping_d1_uncomp.avi"
+        "/mnt/sdc/activitynet_caption/v1-3/test/v_0_1BQPWzRiw.mp4"
     )
 
     query_img = os.path.join(
         os.path.dirname(os.path.abspath(__file__)),
-        "person01_handclapping_d1_uncomp_sample.png",
+        "v_0_1BQPWzRiw_sample.png",
     )
-
-    get_demo_sample_image(video_file_loc, query_img)
+    
+    time_loc = 50
+    get_demo_sample_image(video_file_loc, time_loc, query_img)
