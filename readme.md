@@ -1,7 +1,7 @@
 ## Usage
 - Step1. python ./database/milvus_db.py & sql_db.py to setup the milvus database & sqlite database
 - Step2. python train.py to collect embeddings & annotate of training data
-- Step3. **python retrieval.py**
+- Step3. python retrieval.py
   - retrieval option, text or image or video
 
 

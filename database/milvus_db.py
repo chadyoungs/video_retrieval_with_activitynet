@@ -1,19 +1,19 @@
 import sys
 from pathlib import Path
+
 sys.path.append(str(Path(__file__).parent.parent))
 
 from pymilvus import (
-    DataType,
-    FieldSchema,
     Collection,
     CollectionSchema,
+    DataType,
+    FieldSchema,
     connections,
     utility,
 )
 
-from utils.config import MILVUS_HOST, MILVUS_PORT, COLLECTION_NAME, ALIAS
+from utils.config import ALIAS, COLLECTION_NAME, MILVUS_HOST, MILVUS_PORT
 from utils.embedding import EMBEDDING_DIM
-
 
 # Establish the connection
 try:
@@ -56,12 +56,18 @@ def create_milvus_collection(collection_name, dim):
     index_params = {
         "index_type": "HNSW",
         "metric_type": "COSINE",
-        "params": {"M": 8, "efConstruction": 200}
+        "params": {"M": 8, "efConstruction": 200},
     }
 
     collection.create_index(field_name="clip_vector", index_params=index_params)
 
     print(f"Collection '{collection_name}' created successfully with dimension {dim}.")
+
+
+def batch_insert_milvus(client, collection_name, batch_data):
+    if len(batch_data) == 0:
+        return None
+    return client.insert(collection_name=collection_name, data=batch_data)
 
 
 if __name__ == "__main__":

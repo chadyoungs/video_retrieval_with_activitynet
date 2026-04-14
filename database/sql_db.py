@@ -8,10 +8,10 @@ DB_NAME = "./database/video_metadata.db"
 def init_db():
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
-    c.execute('''
+    c.execute("""
         DROP TABLE IF EXISTS video_clips
-    ''')
-    c.execute('''
+    """)
+    c.execute("""
         CREATE TABLE IF NOT EXISTS video_clips (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             video_file_name TEXT NOT NULL,
@@ -26,7 +26,7 @@ def init_db():
             person_count TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
-    ''')
+    """)
     conn.commit()
     conn.close()
 
@@ -34,25 +34,56 @@ def init_db():
 def save_to_db(video_file_name, video_file_path, segment_start, segment_end, anno):
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
-    c.execute('''
+    c.execute(
+        """
         INSERT INTO video_clips (
             video_file_name, video_file_path, segment_start, segment_end, scene_env, scene_type, weather, lighting,
             time_of_day, person_count
         ) VALUES (?,?,?,?,?,?,?,?,?,?)
-    ''', (
-        video_file_name,
-        video_file_path,
-        segment_start,
-        segment_end,
-        anno.get("scene_env"),
-        anno.get("scene_type"),
-        anno.get("weather"),
-        anno.get("lighting"),
-        anno.get("time_of_day"),
-        anno.get("person_count")
-    ))
+    """,
+        (
+            video_file_name,
+            video_file_path,
+            segment_start,
+            segment_end,
+            anno.get("scene_env"),
+            anno.get("scene_type"),
+            anno.get("weather"),
+            anno.get("lighting"),
+            anno.get("time_of_day"),
+            anno.get("person_count"),
+        ),
+    )
     conn.commit()
     conn.close()
+
+
+def batch_save_to_db(batch_data):
+    if not batch_data:
+        return "Empty batch"
+
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+
+    conn.isolation_level = None
+
+    cursor.execute("BEGIN TRANSACTION")
+    try:
+        sql = """
+        INSERT INTO video_segments 
+        (video_file_name, video_file_path, segment_start, segment_end, annotation)
+        VALUES (?, ?, ?, ?, ?)
+        """
+        cursor.executemany(sql, batch_data)
+        conn.commit()
+        return f"Batch inserted: {len(batch_data)} rows"
+    except Exception as e:
+        conn.rollback()
+        return f"Batch failed: {e}"
+    finally:
+        cursor.close()
+        conn.close()
+
 
 if __name__ == "__main__":
     init_db()

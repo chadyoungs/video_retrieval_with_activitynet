@@ -1,4 +1,5 @@
 import os
+
 import cv2
 
 
@@ -25,11 +26,12 @@ def get_demo_sample_image(video_file_loc, dest_file_loc):
 
     cap.release()
 
+
 if __name__ == "__main__":
     video_file_loc = (
         "/ext-data/datasets/training_lib_KTH/person01_handclapping_d1_uncomp.avi"
     )
-    
+
     query_img = os.path.join(
         os.path.dirname(os.path.abspath(__file__)),
         "person01_handclapping_d1_uncomp_sample.png",

@@ -1,14 +1,13 @@
 import os
 
-from PIL import Image
 import cv2
 import torch
-
-from pymilvus import connections, Collection
+from PIL import Image
+from pymilvus import Collection, connections
 
 from database.milvus_db import milvus_client
-from utils.embedding import processor, model
 from utils.config import COLLECTION_NAME, MILVUS_HOST, MILVUS_PORT
+from utils.embedding import model, processor
 
 ALIAS = "default"  # Use 'default' unless you have a specific reason otherwise
 
