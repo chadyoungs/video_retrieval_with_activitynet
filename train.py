@@ -4,17 +4,14 @@ import sys
 
 sys.path.append(str(pathlib.Path(__file__).parent))
 
-import asyncio
 from functools import lru_cache
 from pathlib import Path
 
-import aiohttp
 import cv2
 import numpy as np
 import torch
 from joblib import Parallel, delayed
 from pymilvus import MilvusClient
-from torch.utils.data import DataLoader, Dataset
 
 from database.milvus_db import batch_insert_milvus
 from database.sql_db import batch_save_to_db
@@ -28,7 +25,6 @@ from utils.config import (
     MILVUS_PORT,
     NUM_PROCESSES,
     NUM_WORKERS,
-    OLLAMA_API_URL,
 )
 from utils.embedding import EMBEDDING_DIM, annotate, generate_video_embedding
 
@@ -129,22 +125,6 @@ def process_single_video(video_file, idx):
             }
         )
     return sqlite_batch, milvus_batch
-
-
-async def async_batch_annotate(annotate_tasks):
-    async with aiohttp.ClientSession() as session:
-        tasks = []
-        for video_file, s, e, rate in annotate_tasks:
-            tasks.append(
-                asyncio.create_task(
-                    session.post(
-                        f"{OLLAMA_API_URL}",
-                        json={"video": video_file, "s": s, "e": e, "rate": rate},
-                    )
-                )
-            )
-        responses = await asyncio.gather(*tasks)
-        return [await r.json() for r in responses]
 
 
 def train():

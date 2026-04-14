@@ -169,18 +169,66 @@ def annotate(
     if not images:
         return _get_default_annotation()
 
-    prompt = f"""
-You are a professional video scene annotation assistant.
-Output ONLY a valid JSON object with NO extra text.
-Annotation rules:
-{json.dumps(ANNOTATION_RULES, indent=2)}
-"""
+    prompt = (
+        f"""
+        You are a strict video scene annotation expert.
+        YOU MUST FOLLOW ALL RULES 100% STRICTLY.
+        YOU ONLY OUTPUT A SINGLE JSON OBJECT, NO OTHER TEXT, NO EXPLANATION, NO MARKDOWN, NO CHATTING.
+
+        ### RULES (YOU CANNOT CHOOSE VALUES OUTSIDE THESE LISTS)
+        """
+        + json.dumps(ANNOTATION_RULES, indent=2)
+        + """
+
+        ### OUTPUT FORMAT (ONLY JSON, NO OTHER CONTENT)
+        {
+            "scene_env": "[value only from list]",
+            "scene_type": "[value only from list]",
+            "weather": "[value only from list]",
+            "lighting": "[value only from list]",
+            "time_of_day": "[value only from list]",
+            "person_count": "[value only from list]"
+        }
+
+        ### EXAMPLE (CORRECT OUTPUT)
+        {
+            "scene_env": "outdoor",
+            "scene_type": "street",
+            "weather": "sunny",
+            "lighting": "bright",
+            "time_of_day": "noon",
+            "person_count": "few"
+        }
+
+        NOW ANNOTATE THE PROVIDED IMAGES.
+        ONLY OUTPUT JSON.
+    """
+    )
 
     payload = {
         "model": OLLAMA_MODEL,
         "messages": [{"role": "user", "content": prompt, "images": images}],
         "stream": False,
         "format": "json",
+        "response_format": {
+            "type": "object",
+            "properties": {
+                "scene_env": {"type": "string"},
+                "scene_type": {"type": "string"},
+                "weather": {"type": "string"},
+                "lighting": {"type": "string"},
+                "time_of_day": {"type": "string"},
+                "person_count": {"type": "string"},
+            },
+            "required": [
+                "scene_env",
+                "scene_type",
+                "weather",
+                "lighting",
+                "time_of_day",
+                "person_count",
+            ],
+        },
     }
 
     for attempt in range(max_retries + 1):
@@ -253,7 +301,7 @@ def generate_video_embedding(
 
             inputs = processor(images=batch_frames, return_tensors="pt").to(DEVICE)
 
-            image_features = model.get_image_features(**inputs)
+            image_features = model.get_image_features(**inputs).pooler_output
 
             normalized = image_features / image_features.norm(p=2, dim=-1, keepdim=True)
             frame_embeddings.extend(normalized.squeeze().cpu().numpy())
@@ -262,3 +310,93 @@ def generate_video_embedding(
             torch.cuda.empty_cache()
 
     return ts_model(frame_embeddings)
+
+
+# # Asynchronous version of annotate with stronger local GPU
+# import aiohttp
+# import asyncio
+
+# async def async_annotate(
+#     session: aiohttp.ClientSession,
+#     video_file_path,
+#     segment_start,
+#     segment_end,
+#     sample_rate,
+#     max_retries=MAX_RETRIES
+# ):
+#     def frame_to_base64(frame):
+#         encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), 85]
+#         _, buffer = cv2.imencode(".jpg", frame, encode_param)
+#         return base64.b64encode(buffer).decode("utf-8")
+
+#     images = read_video_frames(
+#         video_file_path=video_file_path,
+#         segment_start=segment_start,
+#         segment_end=segment_end,
+#         sample_rate=sample_rate,
+#         frame_processor=frame_to_base64,
+#     )
+
+#     if not images:
+#         return _get_default_annotation()
+
+#     prompt = f"""
+# You are a professional video scene annotation assistant.
+# Output ONLY a valid JSON object with NO extra text.
+# Annotation rules:
+# {json.dumps(ANNOTATION_RULES, indent=2)}
+# """
+
+#     payload = {
+#         "model": OLLAMA_MODEL,
+#         "messages": [{"role": "user", "content": prompt, "images": images}],
+#         "stream": False,
+#         "format": "json",
+#     }
+
+#     for attempt in range(max_retries + 1):
+#         try:
+#             if attempt > 0:
+#                 wait_time = RETRY_BACKOFF_FACTOR ** (attempt - 1)
+#                 print(f"Retry {attempt}/{max_retries} - waiting {wait_time:.1f}s...")
+#                 await asyncio.sleep(wait_time)
+
+#             async with session.post(
+#                 OLLAMA_API_URL,
+#                 json=payload,
+#                 timeout=OLLAMA_TIMEOUT,
+#                 headers={"Content-Type": "application/json"},
+#             ) as resp:
+#                 resp.raise_for_status()
+#                 result = await resp.json()
+#                 content = result["message"]["content"].strip()
+#                 output = json.loads(content)
+
+#                 if validate_annotation_output(output):
+#                     return output
+#                 else:
+#                     print(f"Attempt {attempt+1}: Invalid format")
+
+#         except json.JSONDecodeError as e:
+#             print(f"Attempt {attempt+1}: JSON error: {e}")
+#         except Exception as e:
+#             print(f"Attempt {attempt+1}: Error: {e}")
+
+#     return _get_default_annotation()
+
+# async def async_batch_annotate(task_list):
+#     """
+#     task_list = [
+#         (video_path, start, end, sample_rate),
+#         (video_path, start, end, sample_rate),
+#         ...
+#     ]
+#     """
+#     async with aiohttp.ClientSession() as session:
+#         tasks = [
+#             async_annotate(session, *task)
+#             for task in task_list
+#         ]
+
+#         results = await asyncio.gather(*tasks)
+#     return results

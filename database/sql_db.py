@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-import json
 import sqlite3
+from typing import Dict, List
 
 DB_NAME = "./database/video_metadata.db"
 
@@ -70,7 +70,7 @@ def batch_save_to_db(batch_data):
     cursor.execute("BEGIN TRANSACTION")
     try:
         sql = """
-        INSERT INTO video_segments 
+        INSERT INTO video_clips
         (video_file_name, video_file_path, segment_start, segment_end, annotation)
         VALUES (?, ?, ?, ?, ?)
         """
@@ -83,6 +83,64 @@ def batch_save_to_db(batch_data):
     finally:
         cursor.close()
         conn.close()
+
+
+def get_db_connection():
+    conn = sqlite3.connect(DB_NAME)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def query_annotation_by_conditions(conditions: Dict, limit: int = 5) -> List[Dict]:
+    if not conditions:
+        return []
+
+    conn = None
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        where_clauses = []
+        params = []
+        for key, value in conditions.items():
+            where_clauses.append(f"{key} = ?")
+            params.append(value)
+
+        query_sql = f"""
+            SELECT video_file_name, video_file_path, segment_start, segment_end,
+                   scene_env, scene_type, weather, lighting, time_of_day, person_count
+            FROM video_clips
+            WHERE {' AND '.join(where_clauses)}
+            LIMIT ?
+        """
+        params.append(limit)
+
+        cursor.execute(query_sql, params)
+        rows = cursor.fetchall()
+
+        results = []
+        for row in rows:
+            results.append(
+                {
+                    "video_file_name": row["video_file_name"],
+                    "video_file_path": row["video_file_path"],
+                    "segment_start": row["segment_start"],
+                    "segment_end": row["segment_end"],
+                    "scene_env": row["scene_env"],
+                    "scene_type": row["scene_type"],
+                    "weather": row["weather"],
+                    "lighting": row["lighting"],
+                    "time_of_day": row["time_of_day"],
+                    "person_count": row["person_count"],
+                }
+            )
+        return results
+    except Exception as e:
+        print(f"SQL query error: {e}")
+        return []
+    finally:
+        if conn:
+            conn.close()
 
 
 if __name__ == "__main__":

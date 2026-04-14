@@ -8,6 +8,7 @@ from pymilvus import (
     CollectionSchema,
     DataType,
     FieldSchema,
+    MilvusClient,
     connections,
     utility,
 )
@@ -15,16 +16,20 @@ from pymilvus import (
 from utils.config import ALIAS, COLLECTION_NAME, MILVUS_HOST, MILVUS_PORT
 from utils.embedding import EMBEDDING_DIM
 
-# Establish the connection
-try:
-    connections.connect(alias=ALIAS, host=MILVUS_HOST, port=MILVUS_PORT)
-    print(
-        f"Successfully connected to Milvus at {MILVUS_HOST}:{MILVUS_PORT} using alias '{ALIAS}'."
-    )
+_client = None
 
-except Exception as e:
-    # Handle the error, perhaps exit the script
-    print(f"Failed to connect to Milvus: {e}")
+
+def get_milvus_client():
+    global _client
+    if _client is None:
+        try:
+            _client = MilvusClient(
+                uri=f"http://{MILVUS_HOST}:{MILVUS_PORT}", alias=ALIAS
+            )
+            print(f"Connected to Milvus: {MILVUS_HOST}:{MILVUS_PORT}")
+        except Exception as e:
+            raise RuntimeError(f"Milvus connection failed: {e}")
+    return _client
 
 
 # MILVUS COLLECTION DEFINITION (To be run once) ---
