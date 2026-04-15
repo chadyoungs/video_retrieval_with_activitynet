@@ -79,7 +79,20 @@ def batch_insert_sqlite(batch_data):
         formatted_data = []
         for item in batch_data:
             name, path, s, e, ann_dict = item
-            formatted_data.append( (name, path, s, e, ann_dict.get("scene_env"), ann_dict.get("scene_type"), ann_dict.get("weather"), ann_dict.get("lighting"), ann_dict.get("time_of_day"), ann_dict.get("person_count")) )
+            formatted_data.append(
+                (
+                    name,
+                    path,
+                    s,
+                    e,
+                    ann_dict.get("scene_env"),
+                    ann_dict.get("scene_type"),
+                    ann_dict.get("weather"),
+                    ann_dict.get("lighting"),
+                    ann_dict.get("time_of_day"),
+                    ann_dict.get("person_count"),
+                )
+            )
         cursor.executemany(sql, formatted_data)
         conn.commit()
         return f"Batch inserted: {len(batch_data)} rows"
@@ -147,6 +160,19 @@ def query_annotation_by_conditions(conditions: Dict, limit: int = 5) -> List[Dic
     finally:
         if conn:
             conn.close()
+
+
+def search_sql(annotation_conditions: Dict, limit: int = 5) -> List[Dict]:
+    try:
+        sql_hits = query_annotation_by_conditions(
+            conditions=annotation_conditions, limit=limit
+        )
+        for hit in sql_hits:
+            hit["score"] = 1.0
+        return sql_hits
+    except Exception as e:
+        print(f"SQL search error: {e}")
+        return []
 
 
 if __name__ == "__main__":

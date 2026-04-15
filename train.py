@@ -137,7 +137,7 @@ def train():
 
     sqlite_data = []
     milvus_data = []
-            
+
     with tqdm(total=len(video_file_list), desc="Processing videos") as pbar:
         for i in range(0, len(video_file_list), BATCH_VIDEO):
             batch_videos = video_file_list[i : i + BATCH_VIDEO]
@@ -149,7 +149,7 @@ def train():
             for sqlite_batch, milvus_batch in parallel_results:
                 sqlite_data.extend(sqlite_batch)
                 milvus_data.extend(milvus_batch)
-                
+
                 while len(sqlite_data) >= BATCH_SIZE_DB:
                     to_insert_sql = sqlite_data[:BATCH_SIZE_DB]
                     to_insert_mil = milvus_data[:BATCH_SIZE_DB]
@@ -158,16 +158,16 @@ def train():
 
                     sqlite_data = sqlite_data[BATCH_SIZE_DB:]
                     milvus_data = milvus_data[BATCH_SIZE_DB:]
-                
+
                 batch_insert_sqlite(sqlite_data)
                 batch_insert_milvus(client, COLLECTION_NAME, milvus_data)
-                
+
                 sqlite_data = []
                 milvus_data = []
-                
+
             torch.cuda.empty_cache()
             gc.collect()
-        
+
             pbar.update(len(batch_videos))
 
     print("All videos processed & all data inserted!")

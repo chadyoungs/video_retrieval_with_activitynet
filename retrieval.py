@@ -12,7 +12,8 @@ import torch
 from PIL import Image
 from pymilvus import Collection, MilvusClient, connections
 
-from database.sql_db import query_annotation_by_conditions
+from database.milvus_db import search_milvus
+from database.sql_db import search_sql
 from utils.config import (
     ALIAS,
     CLIP_DURATION,
@@ -21,7 +22,7 @@ from utils.config import (
     MILVUS_HOST,
     MILVUS_PORT,
 )
-from utils.embedding import EMBEDDING_DIM, model, processor
+from utils.embedding import DEVICE, EMBEDDING_DIM, model, processor
 
 milvus_client = None
 try:
@@ -43,7 +44,7 @@ def normalize_feature(features: torch.Tensor) -> List[float]:
 def get_text_embedding(query_text: str) -> List[float]:
     text_inputs = processor(
         text=query_text, return_tensors="pt", padding=True, truncation=True
-    )
+    ).to(DEVICE)
     with torch.no_grad():
         text_features = model.get_text_features(**text_inputs).pooler_output
     return normalize_feature(text_features)
@@ -57,68 +58,10 @@ def get_image_embedding(query_img_path: str) -> List[float]:
     else:
         raise ValueError("query_img must be path str or PIL.Image")
 
-    img_inputs = processor(images=img, return_tensors="pt")
+    img_inputs = processor(images=img, return_tensors="pt").to(DEVICE)
     with torch.no_grad():
         img_features = model.get_image_features(**img_inputs).pooler_output
     return normalize_feature(img_features)
-
-
-def search_milvus(
-    query_embedding: List[float], limit: int = 5, metric_type: str = "COSINE"
-) -> List[Dict]:
-
-    try:
-        collection = Collection(COLLECTION_NAME, alias=ALIAS)
-        collection.load()
-
-        search_params = {"metric_type": metric_type, "params": {"nprobe": 10}}
-        results = collection.search(
-            data=[query_embedding],
-            anns_field="clip_vector",
-            param=search_params,
-            limit=limit,
-            output_fields=[
-                "video_id",
-                "video_file_name",
-                "video_file_path",
-                "segment_start",
-                "segment_end",
-            ],
-        )
-        collection.release()
-
-        milvus_hits = []
-        for hit in results[0]:
-            entity = hit.entity
-            milvus_hits.append(
-                {
-                    "video_file_name": entity.get("video_file_name"),
-                    "video_file_path": entity.get("video_file_path"),
-                    "segment_start": entity.get("segment_start"),
-                    "segment_end": entity.get("segment_end"),
-                    "distance": hit.distance,
-                    "score": (
-                        1 - hit.distance if metric_type == "COSINE" else hit.distance
-                    ),
-                }
-            )
-        return milvus_hits
-    except Exception as e:
-        print(f"Milvus search error: {e}")
-        return []
-
-
-def search_sql(annotation_conditions: Dict, limit: int = 5) -> List[Dict]:
-    try:
-        sql_hits = query_annotation_by_conditions(
-            conditions=annotation_conditions, limit=limit
-        )
-        for hit in sql_hits:
-            hit["score"] = 1.0
-        return sql_hits
-    except Exception as e:
-        print(f"SQL search error: {e}")
-        return []
 
 
 def hybrid_retrieval(
@@ -265,21 +208,23 @@ def retrieval_with_image(
 
 
 if __name__ == "__main__":
-    # text based
-    query_text = "hand clapping"
-    annotation_conditions = {"scene_env": "outdoor", "person_count": "few"}
-    retrieval_with_text(query_text, annotation_conditions, limit=5)
+    option = "text"
 
-    # image based
-    query_img = os.path.join(
-        os.path.dirname(os.path.abspath(__file__)),
-        "./samples/person01_handclapping_d1_uncomp_sample.png",
-    )
-    retrieval_with_image(
-        query_img_path=query_img,
-        annotation_conditions={"weather": "sunny", "lighting": "bright"},
-        limit=5,
-    )
-
-    # video based
-    # To do
+    if option == "text":
+        query_text = "snowy mountain"
+        annotation_conditions = {"scene_env": "outdoor", "person_count": "single"}
+        retrieval_with_text(query_text, annotation_conditions, limit=5)
+    elif option == "image":
+        query_img = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)),
+            "./samples/v_0_1BQPWzRiw_sample.png",
+        )
+        retrieval_with_image(
+            query_img_path=query_img,
+            annotation_conditions={"scene_env": "outdoor", "lighting": "bright"},
+            limit=5,
+        )
+    else:
+        # video based
+        # To do
+        pass
