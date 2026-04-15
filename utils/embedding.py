@@ -10,7 +10,8 @@ import numpy as np
 import requests
 import torch
 from PIL import Image
-from transformers import CLIPModel, CLIPProcessor
+#from transformers import CLIPModel, CLIPProcessor
+from transformers import AutoProcessor, AutoModelForZeroShotImageClassification
 
 from utils.config import (
     CLIP_BATCH_SIZE,
@@ -51,8 +52,11 @@ ANNOTATION_RULES = {
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
-model = CLIPModel.from_pretrained(CLIP_MODEL_NAME).to(DEVICE).eval()
-processor = CLIPProcessor.from_pretrained(CLIP_MODEL_NAME)
+#model = CLIPModel.from_pretrained(CLIP_MODEL_NAME).to(DEVICE).eval()
+#processor = CLIPProcessor.from_pretrained(CLIP_MODEL_NAME)
+processor = AutoProcessor.from_pretrained("openai/clip-vit-base-patch32")
+model = AutoModelForZeroShotImageClassification.from_pretrained("openai/clip-vit-base-patch32").to(DEVICE).eval()
+
 EMBEDDING_DIM = model.config.projection_dim  # Typically 512
 
 
@@ -251,6 +255,7 @@ def annotate(
             output = json.loads(content)
 
             if validate_annotation_output(output):
+                print(f"Annotation successful on attempt {attempt+1} for {os.path.basename(video_file_path)} [{segment_start:.1f}s - {segment_end:.1f}s]")
                 return output
             else:
                 print(f"Attempt {attempt+1}: Invalid annotation format - {content}")
@@ -308,7 +313,8 @@ def generate_video_embedding(
 
             del inputs, image_features, normalized
             torch.cuda.empty_cache()
-
+    
+    print(f"Generated {len(frame_embeddings)} frame embeddings for video {os.path.basename(video_file_path)} [{segment_start:.1f}s - {segment_end:.1f}s]")
     return ts_model(frame_embeddings)
 
 

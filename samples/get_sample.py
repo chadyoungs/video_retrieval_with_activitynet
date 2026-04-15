@@ -28,14 +28,12 @@ def get_demo_sample_image(video_file_loc, time_loc, dest_file_loc):
 
 
 if __name__ == "__main__":
-    video_file_loc = (
-        "/mnt/sdc/activitynet_caption/v1-3/test/v_0_1BQPWzRiw.mp4"
-    )
+    video_file_loc = "/mnt/sdc/activitynet_caption/v1-3/test/v_0_1BQPWzRiw.mp4"
 
     query_img = os.path.join(
         os.path.dirname(os.path.abspath(__file__)),
         "v_0_1BQPWzRiw_sample.png",
     )
-    
+
     time_loc = 50
     get_demo_sample_image(video_file_loc, time_loc, query_img)

@@ -1,5 +1,7 @@
 __pycache__
 .venv
 *.db
+*.json
+*.safetensors
 json
 sqlite3

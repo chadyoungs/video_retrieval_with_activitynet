@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import json
 import sqlite3
 from typing import Dict, List
 
@@ -58,7 +59,7 @@ def save_to_db(video_file_name, video_file_path, segment_start, segment_end, ann
     conn.close()
 
 
-def batch_save_to_db(batch_data):
+def batch_insert_sqlite(batch_data):
     if not batch_data:
         return "Empty batch"
 
@@ -70,11 +71,16 @@ def batch_save_to_db(batch_data):
     cursor.execute("BEGIN TRANSACTION")
     try:
         sql = """
-        INSERT INTO video_clips
-        (video_file_name, video_file_path, segment_start, segment_end, annotation)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO video_clips (
+            video_file_name, video_file_path, segment_start, segment_end, scene_env, scene_type, weather, lighting,
+            time_of_day, person_count
+        ) VALUES (?,?,?,?,?,?,?,?,?,?)
         """
-        cursor.executemany(sql, batch_data)
+        formatted_data = []
+        for item in batch_data:
+            name, path, s, e, ann_dict = item
+            formatted_data.append( (name, path, s, e, ann_dict.get("scene_env"), ann_dict.get("scene_type"), ann_dict.get("weather"), ann_dict.get("lighting"), ann_dict.get("time_of_day"), ann_dict.get("person_count")) )
+        cursor.executemany(sql, formatted_data)
         conn.commit()
         return f"Batch inserted: {len(batch_data)} rows"
     except Exception as e:

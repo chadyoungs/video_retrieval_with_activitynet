@@ -35,7 +35,7 @@ except Exception as e:
     sys.exit(1)
 
 
-def normalize_feature(features: torch.Tensor) -> List[float]:        
+def normalize_feature(features: torch.Tensor) -> List[float]:
     normalized = features / features.norm(p=2, dim=-1, keepdim=True)
     return normalized.squeeze().cpu().numpy().tolist()
 
@@ -280,6 +280,6 @@ if __name__ == "__main__":
         annotation_conditions={"weather": "sunny", "lighting": "bright"},
         limit=5,
     )
-    
+
     # video based
     # To do

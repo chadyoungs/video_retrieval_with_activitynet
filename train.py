@@ -4,6 +4,7 @@ import sys
 
 sys.path.append(str(pathlib.Path(__file__).parent))
 
+import gc
 from functools import lru_cache
 from pathlib import Path
 
@@ -12,12 +13,14 @@ import numpy as np
 import torch
 from joblib import Parallel, delayed
 from pymilvus import MilvusClient
+from tqdm import tqdm
 
 from database.milvus_db import batch_insert_milvus
-from database.sql_db import batch_save_to_db
+from database.sql_db import batch_insert_sqlite
 from utils.config import (
     ALIAS,
     BATCH_SIZE_DB,
+    BATCH_VIDEO,
     CLIP_DURATION,
     COLLECTION_NAME,
     FRAME_SAMPLING_RATE,
@@ -100,7 +103,7 @@ def process_single_video(video_file, idx):
         annotate_results = [cached_annotate(*seg) for seg in video_segments]
         embeddings = [cached_generate_video_embedding(*seg) for seg in video_segments]
     else:
-        raise NotImplementedError("Non-cached annotation is not implemented yet")
+        raise NotImplementedError("Non-cached processing is not implemented yet")
 
     video_file_name = os.path.basename(video_file)
     video_file_path = os.path.dirname(video_file)
@@ -116,7 +119,6 @@ def process_single_video(video_file, idx):
         # Milvus batch
         milvus_batch.append(
             {
-                "video_id": idx,
                 "video_file_name": video_file_name,
                 "video_file_path": video_file_path,
                 "segment_start": s,
@@ -133,28 +135,42 @@ def train():
     video_file_list = get_video_file_list(data_root, file_format)
     client = get_milvus_client()
 
-    parallel_results = Parallel(n_jobs=NUM_PROCESSES, backend="threading")(
-        delayed(process_single_video)(video_file, idx)
-        for idx, video_file in enumerate(video_file_list)
-    )
+    sqlite_data = []
+    milvus_data = []
+            
+    with tqdm(total=len(video_file_list), desc="Processing videos") as pbar:
+        for i in range(0, len(video_file_list), BATCH_VIDEO):
+            batch_videos = video_file_list[i : i + BATCH_VIDEO]
+            parallel_results = Parallel(n_jobs=NUM_PROCESSES, backend="threading")(
+                delayed(process_single_video)(video_file, idx)
+                for idx, video_file in enumerate(batch_videos)
+            )
 
-    all_sqlite_data = []
-    all_milvus_data = []
-    for sqlite_batch, milvus_batch in parallel_results:
-        all_sqlite_data.extend(sqlite_batch)
-        all_milvus_data.extend(milvus_batch)
+            for sqlite_batch, milvus_batch in parallel_results:
+                sqlite_data.extend(sqlite_batch)
+                milvus_data.extend(milvus_batch)
+                
+                while len(sqlite_data) >= BATCH_SIZE_DB:
+                    to_insert_sql = sqlite_data[:BATCH_SIZE_DB]
+                    to_insert_mil = milvus_data[:BATCH_SIZE_DB]
+                    batch_insert_sqlite(to_insert_sql)
+                    batch_insert_milvus(client, COLLECTION_NAME, to_insert_mil)
 
-    for i in range(0, len(all_sqlite_data), BATCH_SIZE_DB):
-        batch = all_sqlite_data[i : i + BATCH_SIZE_DB]
-        insert_result_sqlite = batch_save_to_db(batch)
-        print(f"SQLite batch {i//BATCH_SIZE_DB} inserted: {len(batch)} rows")
+                    sqlite_data = sqlite_data[BATCH_SIZE_DB:]
+                    milvus_data = milvus_data[BATCH_SIZE_DB:]
+                
+                batch_insert_sqlite(sqlite_data)
+                batch_insert_milvus(client, COLLECTION_NAME, milvus_data)
+                
+                sqlite_data = []
+                milvus_data = []
+                
+            torch.cuda.empty_cache()
+            gc.collect()
+        
+            pbar.update(len(batch_videos))
 
-    for i in range(0, len(all_milvus_data), BATCH_SIZE_DB):
-        batch = all_milvus_data[i : i + BATCH_SIZE_DB]
-        insert_result_milvus = batch_insert_milvus(client, COLLECTION_NAME, batch)
-        print(
-            f"Milvus batch {i//BATCH_SIZE_DB} inserted: {len(batch)} rows, ID: {insert_result_milvus}"
-        )
+    print("All videos processed & all data inserted!")
 
 
 if __name__ == "__main__":

@@ -24,7 +24,8 @@ FRAME_SAMPLING_RATE = 25  # frame sampling
 
 # computation
 NUM_WORKERS = 4
-BATCH_SIZE_DB = 200  # batch size for database insertion
-NUM_PROCESSES = int(multiprocessing.cpu_count() / 2)
+BATCH_VIDEO = 1  # batch size for video processing
+BATCH_SIZE_DB = 100  # batch size for database insertion
+NUM_PROCESSES = 1
 
 CLIP_BATCH_SIZE = 6  # batch size for CLIP embedding generation
