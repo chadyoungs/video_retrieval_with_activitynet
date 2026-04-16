@@ -23,15 +23,15 @@ CLIP_DURATION = 10  # seconds
 FRAME_SAMPLING_RATE = 25  # frame sampling
 
 # computation
-NUM_WORKERS = 4
+NUM_WORKERS = 2
 # Process multiple videos in parallel; each thread can pipeline annotation I/O with GPU work.
-BATCH_VIDEO = 4  # number of videos per outer batch
+BATCH_VIDEO = 2  # number of videos per outer batch
 BATCH_SIZE_DB = 100  # batch size for database insertion
 NUM_PROCESSES = max(1, multiprocessing.cpu_count() // 2)  # parallel video workers
 
 CLIP_BATCH_SIZE = 6  # batch size for CLIP embedding generation
 
 # Maximum number of frames sent to the VLM for scene annotation per segment.
-# Sending 3 uniformly-sampled keyframes instead of all sampled frames dramatically
+# Sending 5 keyframes instead of all sampled frames dramatically
 # reduces VLM input size while preserving annotation quality.
-N_VLM_FRAMES = 3
+N_VLM_FRAMES = 5
