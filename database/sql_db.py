@@ -28,6 +28,14 @@ def init_db():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
+    # Column names are validated against a fixed allowlist to prevent any
+    # accidental SQL injection if this tuple is ever widened.
+    _ANNOTATION_COLUMNS = frozenset(
+        ("scene_env", "scene_type", "weather", "lighting", "time_of_day", "person_count")
+    )
+    for col in ("scene_env", "scene_type", "weather", "lighting", "time_of_day", "person_count"):
+        assert col in _ANNOTATION_COLUMNS, f"Unexpected column name: {col}"
+        c.execute(f"CREATE INDEX IF NOT EXISTS idx_{col} ON video_clips({col})")
     conn.commit()
     conn.close()
 
@@ -111,6 +119,13 @@ def get_db_connection():
 
 
 def query_annotation_by_conditions(conditions: Dict, limit: int = 5) -> List[Dict]:
+    """
+    Return video clips that match *any* of the supplied annotation conditions,
+    scored by how many conditions they satisfy.  Results are ordered by match
+    count (descending) so that rows matching all conditions rank above partial
+    matches.  This replaces the previous AND-only query that provided no
+    ranking differentiation among results.
+    """
     if not conditions:
         return []
 
@@ -119,24 +134,37 @@ def query_annotation_by_conditions(conditions: Dict, limit: int = 5) -> List[Dic
         conn = get_db_connection()
         cursor = conn.cursor()
 
+        # Build a CASE expression that adds 1 for each matching condition so
+        # that the score is proportional to the number of satisfied conditions.
+        score_cases = []
+        score_params = []
         where_clauses = []
-        params = []
+        where_params = []
+
         for key, value in conditions.items():
+            score_cases.append(f"CASE WHEN {key} = ? THEN 1 ELSE 0 END")
+            score_params.append(value)
             where_clauses.append(f"{key} = ?")
-            params.append(value)
+            where_params.append(value)
+
+        score_expr = " + ".join(score_cases)
+        where_expr = " OR ".join(where_clauses)
 
         query_sql = f"""
             SELECT video_file_name, video_file_path, segment_start, segment_end,
-                   scene_env, scene_type, weather, lighting, time_of_day, person_count
+                   scene_env, scene_type, weather, lighting, time_of_day, person_count,
+                   ({score_expr}) AS match_count
             FROM video_clips
-            WHERE {' AND '.join(where_clauses)}
+            WHERE {where_expr}
+            ORDER BY match_count DESC
             LIMIT ?
         """
-        params.append(limit)
+        params = score_params + where_params + [limit]
 
         cursor.execute(query_sql, params)
         rows = cursor.fetchall()
 
+        n_conditions = len(conditions)
         results = []
         for row in rows:
             results.append(
@@ -151,6 +179,9 @@ def query_annotation_by_conditions(conditions: Dict, limit: int = 5) -> List[Dic
                     "lighting": row["lighting"],
                     "time_of_day": row["time_of_day"],
                     "person_count": row["person_count"],
+                    # Normalise to [0, 1] so that hybrid_retrieval weight_sql is meaningful.
+                    "_match_count": row["match_count"],
+                    "_n_conditions": n_conditions,
                 }
             )
         return results
@@ -167,8 +198,14 @@ def search_sql(annotation_conditions: Dict, limit: int = 5) -> List[Dict]:
         sql_hits = query_annotation_by_conditions(
             conditions=annotation_conditions, limit=limit
         )
+        n = len(annotation_conditions)
         for hit in sql_hits:
-            hit["score"] = 1.0
+            matched = hit.pop("_match_count", n)
+            hit.pop("_n_conditions", None)
+            # Score proportional to the fraction of conditions satisfied so
+            # that partial matches rank lower than full matches in the hybrid
+            # fusion step.
+            hit["score"] = matched / n if n > 0 else 1.0
         return sql_hits
     except Exception as e:
         print(f"SQL search error: {e}")

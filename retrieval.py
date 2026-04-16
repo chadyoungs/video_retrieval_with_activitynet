@@ -6,31 +6,26 @@ sys.path.append(str(Path(__file__).parent))
 
 from typing import Dict, List, Tuple
 
-import cv2
-import numpy as np
 import torch
 from PIL import Image
-from pymilvus import Collection, MilvusClient, connections
 
-from database.milvus_db import search_milvus
+from database.milvus_db import get_milvus_client, search_milvus
 from database.sql_db import search_sql
 from utils.config import (
-    ALIAS,
     CLIP_DURATION,
     COLLECTION_NAME,
     FRAME_SAMPLING_RATE,
     MILVUS_HOST,
     MILVUS_PORT,
 )
-from utils.embedding import DEVICE, EMBEDDING_DIM, model, processor
+from utils.embedding import DEVICE, EMBEDDING_DIM, get_model, get_processor
 
-milvus_client = None
+# Obtain (or create) the shared Milvus singleton.  This replaces the previous
+# pattern of creating a second MilvusClient + connections.connect() pair here,
+# which resulted in two separate connections to the same server.
 try:
-    milvus_client = MilvusClient(uri=f"http://{MILVUS_HOST}:{MILVUS_PORT}", alias=ALIAS)
-    connections.connect(alias=ALIAS, host=MILVUS_HOST, port=MILVUS_PORT)
-    print(
-        f"Successfully connected to Milvus at {MILVUS_HOST}:{MILVUS_PORT} (alias: {ALIAS})"
-    )
+    get_milvus_client()
+    print(f"Successfully connected to Milvus at {MILVUS_HOST}:{MILVUS_PORT}")
 except Exception as e:
     print(f"Failed to connect to Milvus: {e}")
     sys.exit(1)
@@ -42,11 +37,13 @@ def normalize_feature(features: torch.Tensor) -> List[float]:
 
 
 def get_text_embedding(query_text: str) -> List[float]:
-    text_inputs = processor(
+    _processor = get_processor()
+    _model = get_model()
+    text_inputs = _processor(
         text=query_text, return_tensors="pt", padding=True, truncation=True
     ).to(DEVICE)
     with torch.no_grad():
-        text_features = model.get_text_features(**text_inputs).pooler_output
+        text_features = _model.get_text_features(**text_inputs).pooler_output
     return normalize_feature(text_features)
 
 
@@ -58,9 +55,11 @@ def get_image_embedding(query_img_path: str) -> List[float]:
     else:
         raise ValueError("query_img must be path str or PIL.Image")
 
-    img_inputs = processor(images=img, return_tensors="pt").to(DEVICE)
+    _processor = get_processor()
+    _model = get_model()
+    img_inputs = _processor(images=img, return_tensors="pt").to(DEVICE)
     with torch.no_grad():
-        img_features = model.get_image_features(**img_inputs).pooler_output
+        img_features = _model.get_image_features(**img_inputs).pooler_output
     return normalize_feature(img_features)
 
 

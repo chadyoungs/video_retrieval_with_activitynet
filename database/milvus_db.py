@@ -60,7 +60,9 @@ def create_milvus_collection(client, collection_name, dim):
         field_name="clip_vector",
         index_type="HNSW",
         metric_type="COSINE",
-        params={"M": 8, "efConstruction": 200},
+        # M=16 is the recommended default (M=8 degrades recall for large collections).
+        # efConstruction=200 keeps index build quality high.
+        params={"M": 16, "efConstruction": 200},
     )
 
     # 5. Create Collection (This creates AND loads it automatically!)
@@ -91,7 +93,7 @@ def search_milvus(query_embedding: list, limit: int = 5) -> list:
                 "segment_start",
                 "segment_end",
             ],
-            search_params={"metric_type": "COSINE", "params": {"nprobe": 10}},
+            search_params={"metric_type": "COSINE", "params": {"ef": 64}},
         )
 
         milvus_hits = []

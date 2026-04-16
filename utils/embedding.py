@@ -2,7 +2,6 @@ import base64
 import json
 import os
 import time
-from functools import lru_cache
 from pathlib import Path
 
 import cv2
@@ -18,6 +17,7 @@ from utils.config import (
     CLIP_BATCH_SIZE,
     CLIP_MODEL_NAME,
     MAX_RETRIES,
+    N_VLM_FRAMES,
     OLLAMA_API_URL,
     OLLAMA_MODEL,
     OLLAMA_TIMEOUT,
@@ -53,18 +53,59 @@ ANNOTATION_RULES = {
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
-# model = CLIPModel.from_pretrained(CLIP_MODEL_NAME).to(DEVICE).eval()
-# processor = CLIPProcessor.from_pretrained(CLIP_MODEL_NAME)
-processor = AutoProcessor.from_pretrained("openai/clip-vit-base-patch32")
-model = (
-    AutoModelForZeroShotImageClassification.from_pretrained(
-        "openai/clip-vit-base-patch32"
-    )
-    .to(DEVICE)
-    .eval()
-)
+# Lazy-load the CLIP model and processor so that importing this module does not
+# pay the full model-load cost unless inference is actually needed.  The two
+# module-level names are kept for backward compatibility; code that accessed
+# `model` / `processor` directly still works after the first call to either
+# get_model() or get_processor().
+_model = None
+_processor = None
 
-EMBEDDING_DIM = model.config.projection_dim  # Typically 512
+
+def get_processor():
+    global _processor
+    if _processor is None:
+        _processor = AutoProcessor.from_pretrained(CLIP_MODEL_NAME)
+    return _processor
+
+
+def get_model():
+    global _model
+    if _model is None:
+        _model = (
+            AutoModelForZeroShotImageClassification.from_pretrained(CLIP_MODEL_NAME)
+            .to(DEVICE)
+            .eval()
+        )
+    return _model
+
+
+# Backward-compat aliases accessed at import time by other modules.
+# EMBEDDING_DIM is derived lazily to avoid loading the model just for the constant.
+# CLIP ViT-B/32 always exposes projection_dim=512; we hard-code it here so that
+# milvus_db.py can read EMBEDDING_DIM without triggering a full model load.
+EMBEDDING_DIM = 512
+
+# Keep module-level `model` and `processor` as lazy proxies so existing code
+# that does `from utils.embedding import model, processor` keeps working.
+class _LazyModel:
+    def __getattr__(self, name):
+        return getattr(get_model(), name)
+
+    def __call__(self, *args, **kwargs):
+        return get_model()(*args, **kwargs)
+
+
+class _LazyProcessor:
+    def __getattr__(self, name):
+        return getattr(get_processor(), name)
+
+    def __call__(self, *args, **kwargs):
+        return get_processor()(*args, **kwargs)
+
+
+model = _LazyModel()
+processor = _LazyProcessor()
 
 
 def validate_video_file(video_path):
@@ -80,17 +121,12 @@ def validate_video_file(video_path):
     return str(video_path)
 
 
-def read_video_frames(
-    video_file_path, segment_start, segment_end, sample_rate, frame_processor
-):
+def read_video_frames_raw(video_file_path, segment_start, segment_end, sample_rate):
     """
-    read video frames
-    :param video_file_path
-    :param segment_start
-    :param segment_end
-    :param sample_rate
-    :param frame_processor
-    :return: processed frame results list
+    Read sampled frames from a video segment as raw BGR numpy arrays.
+
+    Returns a list of numpy arrays (H, W, 3) or None on error.  Callers can
+    convert to PIL or base64 as needed, avoiding duplicate video decodes.
     """
     try:
         video_file_path = validate_video_file(video_file_path)
@@ -102,35 +138,54 @@ def read_video_frames(
         start_frame = int(segment_start * fps)
         end_frame = int(segment_end * fps)
         frame_count = 0
-        results = []
+        frames = []
 
         while cap.isOpened():
             ret, frame = cap.read()
             if not ret:
                 break
 
-            if (
-                start_frame <= frame_count < end_frame
-                and frame_count % sample_rate == 0
-            ):
-                try:
-                    results.append(frame_processor(frame))
-                except Exception as e:
-                    print(f"Error processing frame {frame_count}: {str(e)}")
+            if start_frame <= frame_count < end_frame and frame_count % sample_rate == 0:
+                frames.append(frame)
 
             frame_count += 1
+            if frame_count >= end_frame:
+                break
 
         cap.release()
 
-        if not results:
+        if not frames:
             print(
-                f"No frames processed for video {video_file_path} (start={segment_start}, end={segment_end})"
+                f"No frames read for {video_file_path} "
+                f"(start={segment_start}, end={segment_end})"
             )
-        return results
+        return frames
 
     except Exception as e:
         print(f"Error reading video frames: {str(e)}")
         return None
+
+
+def read_video_frames(
+    video_file_path, segment_start, segment_end, sample_rate, frame_processor
+):
+    """
+    Legacy helper kept for backward compatibility.
+    Reads raw frames once and applies frame_processor to each.
+    """
+    raw_frames = read_video_frames_raw(
+        video_file_path, segment_start, segment_end, sample_rate
+    )
+    if not raw_frames:
+        return raw_frames  # None or []
+
+    results = []
+    for frame in raw_frames:
+        try:
+            results.append(frame_processor(frame))
+        except Exception as e:
+            print(f"Error processing frame: {str(e)}")
+    return results
 
 
 def validate_annotation_output(output):
@@ -160,25 +215,53 @@ def _get_default_annotation():
     }
 
 
+def _select_keyframes(frames, n):
+    """Return exactly *n* uniformly-spaced frames from *frames* (or fewer if
+    *frames* has fewer than *n* elements).  Returns an empty list when *n* <= 0."""
+    if not frames or n <= 0:
+        return []
+    if len(frames) <= n:
+        return frames
+    # Integer arithmetic avoids a numpy allocation for the typical case of n=3.
+    indices = [int(i * (len(frames) - 1) / (n - 1)) for i in range(n)]
+    return [frames[i] for i in indices]
+
+
 def annotate(
-    video_file_path, segment_start, segment_end, sample_rate, max_retries=MAX_RETRIES
+    video_file_path,
+    segment_start,
+    segment_end,
+    sample_rate,
+    max_retries=MAX_RETRIES,
+    preloaded_frames=None,
 ):
+    """
+    Annotate a video segment using a local VLM (Ollama).
+
+    :param preloaded_frames: optional list of BGR numpy arrays already read by
+        the caller.  When provided the video file is NOT re-opened, eliminating
+        a duplicate decode.  N_VLM_FRAMES keyframes are selected from the list.
+    """
+
     def frame_to_base64(frame):
         """Convert OpenCV frame to base64 string"""
         encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), 85]
         _, buffer = cv2.imencode(".jpg", frame, encode_param)
         return base64.b64encode(buffer).decode("utf-8")
 
-    images = read_video_frames(
-        video_file_path=video_file_path,
-        segment_start=segment_start,
-        segment_end=segment_end,
-        sample_rate=sample_rate,
-        frame_processor=frame_to_base64,
-    )
+    if preloaded_frames is not None:
+        raw_frames = preloaded_frames
+    else:
+        raw_frames = read_video_frames_raw(
+            video_file_path, segment_start, segment_end, sample_rate
+        )
 
-    if not images:
+    if not raw_frames:
         return _get_default_annotation()
+
+    # Select a small number of representative keyframes to reduce VLM payload.
+    keyframes = _select_keyframes(raw_frames, N_VLM_FRAMES)
+    images = [frame_to_base64(f) for f in keyframes]
 
     prompt = (
         f"""
@@ -263,7 +346,9 @@ def annotate(
 
             if validate_annotation_output(output):
                 print(
-                    f"Annotation successful on attempt {attempt+1} for {os.path.basename(video_file_path)} [{segment_start:.1f}s - {segment_end:.1f}s]"
+                    f"Annotation successful on attempt {attempt+1} for "
+                    f"{os.path.basename(video_file_path)} "
+                    f"[{segment_start:.1f}s - {segment_end:.1f}s]"
                 )
                 return output
             else:
@@ -291,129 +376,63 @@ def ts_model(frame_embeddings):
 
 
 def generate_video_embedding(
-    video_file_path, segment_start, segment_end, sample_rate, dim
+    video_file_path,
+    segment_start,
+    segment_end,
+    sample_rate,
+    dim,
+    preloaded_frames=None,
 ):
+    """
+    Generate a CLIP embedding for a video segment.
+
+    :param preloaded_frames: optional list of BGR numpy arrays already read by
+        the caller.  When provided the video file is NOT re-opened.
+    """
+
     def frame_to_pil(frame):
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         return Image.fromarray(rgb_frame)
 
-    pil_frames = read_video_frames(
-        video_file_path=video_file_path,
-        segment_start=segment_start,
-        segment_end=segment_end,
-        sample_rate=sample_rate,
-        frame_processor=frame_to_pil,
-    )
+    if preloaded_frames is not None:
+        pil_frames = [frame_to_pil(f) for f in preloaded_frames]
+    else:
+        pil_frames = read_video_frames(
+            video_file_path=video_file_path,
+            segment_start=segment_start,
+            segment_end=segment_end,
+            sample_rate=sample_rate,
+            frame_processor=frame_to_pil,
+        )
 
     if not pil_frames:
         return None
+
+    _model = get_model()
+    _processor = get_processor()
 
     frame_embeddings = []
     with torch.no_grad():
         for i in range(0, len(pil_frames), CLIP_BATCH_SIZE):
             batch_frames = pil_frames[i : i + CLIP_BATCH_SIZE]
 
-            inputs = processor(images=batch_frames, return_tensors="pt").to(DEVICE)
+            inputs = _processor(images=batch_frames, return_tensors="pt").to(DEVICE)
 
-            image_features = model.get_image_features(**inputs).pooler_output
+            image_features = _model.get_image_features(**inputs).pooler_output
 
             normalized = image_features / image_features.norm(p=2, dim=-1, keepdim=True)
             frame_embeddings.extend(normalized.squeeze().cpu().numpy())
 
             del inputs, image_features, normalized
-            torch.cuda.empty_cache()
+
+    # Release GPU cache once after all mini-batches, not on every iteration.
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
 
     print(
-        f"Generated {len(frame_embeddings)} frame embeddings for video {os.path.basename(video_file_path)} [{segment_start:.1f}s - {segment_end:.1f}s]"
+        f"Generated {len(frame_embeddings)} frame embeddings for video "
+        f"{os.path.basename(video_file_path)} "
+        f"[{segment_start:.1f}s - {segment_end:.1f}s]"
     )
     return ts_model(frame_embeddings)
 
-
-# # Asynchronous version of annotate with stronger local GPU
-# import aiohttp
-# import asyncio
-
-# async def async_annotate(
-#     session: aiohttp.ClientSession,
-#     video_file_path,
-#     segment_start,
-#     segment_end,
-#     sample_rate,
-#     max_retries=MAX_RETRIES
-# ):
-#     def frame_to_base64(frame):
-#         encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), 85]
-#         _, buffer = cv2.imencode(".jpg", frame, encode_param)
-#         return base64.b64encode(buffer).decode("utf-8")
-
-#     images = read_video_frames(
-#         video_file_path=video_file_path,
-#         segment_start=segment_start,
-#         segment_end=segment_end,
-#         sample_rate=sample_rate,
-#         frame_processor=frame_to_base64,
-#     )
-
-#     if not images:
-#         return _get_default_annotation()
-
-#     prompt = f"""
-# You are a professional video scene annotation assistant.
-# Output ONLY a valid JSON object with NO extra text.
-# Annotation rules:
-# {json.dumps(ANNOTATION_RULES, indent=2)}
-# """
-
-#     payload = {
-#         "model": OLLAMA_MODEL,
-#         "messages": [{"role": "user", "content": prompt, "images": images}],
-#         "stream": False,
-#         "format": "json",
-#     }
-
-#     for attempt in range(max_retries + 1):
-#         try:
-#             if attempt > 0:
-#                 wait_time = RETRY_BACKOFF_FACTOR ** (attempt - 1)
-#                 print(f"Retry {attempt}/{max_retries} - waiting {wait_time:.1f}s...")
-#                 await asyncio.sleep(wait_time)
-
-#             async with session.post(
-#                 OLLAMA_API_URL,
-#                 json=payload,
-#                 timeout=OLLAMA_TIMEOUT,
-#                 headers={"Content-Type": "application/json"},
-#             ) as resp:
-#                 resp.raise_for_status()
-#                 result = await resp.json()
-#                 content = result["message"]["content"].strip()
-#                 output = json.loads(content)
-
-#                 if validate_annotation_output(output):
-#                     return output
-#                 else:
-#                     print(f"Attempt {attempt+1}: Invalid format")
-
-#         except json.JSONDecodeError as e:
-#             print(f"Attempt {attempt+1}: JSON error: {e}")
-#         except Exception as e:
-#             print(f"Attempt {attempt+1}: Error: {e}")
-
-#     return _get_default_annotation()
-
-# async def async_batch_annotate(task_list):
-#     """
-#     task_list = [
-#         (video_path, start, end, sample_rate),
-#         (video_path, start, end, sample_rate),
-#         ...
-#     ]
-#     """
-#     async with aiohttp.ClientSession() as session:
-#         tasks = [
-#             async_annotate(session, *task)
-#             for task in task_list
-#         ]
-
-#         results = await asyncio.gather(*tasks)
-#     return results
