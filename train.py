@@ -5,14 +5,13 @@ import sys
 sys.path.append(str(pathlib.Path(__file__).parent))
 
 import gc
-from functools import lru_cache
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import cv2
 import numpy as np
 import torch
 from joblib import Parallel, delayed
-from pymilvus import MilvusClient
 from tqdm import tqdm
 
 from database.milvus_db import batch_insert_milvus
@@ -29,10 +28,10 @@ from utils.config import (
     NUM_PROCESSES,
     NUM_WORKERS,
 )
-from utils.embedding import EMBEDDING_DIM, annotate, generate_video_embedding
+from utils.embedding import EMBEDDING_DIM, annotate, generate_video_embedding, read_video_frames_raw
+from pymilvus import MilvusClient
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-CACHE_ANNOTATION = True
 
 
 _client = None
@@ -74,49 +73,72 @@ def video_start_end_generator(video_file, clip_duration):
     return segment_starts.tolist(), segment_ends.tolist()
 
 
-@lru_cache(maxsize=10000)
-def cached_annotate(video_file, segment_start, segment_end, frame_sampling_rate):
+def _process_segment_annotation(video_file, segment_start, segment_end, raw_frames):
+    """Run annotation for a single segment using pre-read frames (I/O-bound)."""
     return annotate(
-        video_file, segment_start, segment_end, frame_sampling_rate, max_retries=1
-    )
-
-
-@lru_cache(maxsize=10000)
-def cached_generate_video_embedding(
-    video_file, segment_start, segment_end, sample_rate
-):
-    return generate_video_embedding(
-        video_file, segment_start, segment_end, sample_rate, EMBEDDING_DIM
+        video_file,
+        segment_start,
+        segment_end,
+        FRAME_SAMPLING_RATE,
+        max_retries=1,
+        preloaded_frames=raw_frames,
     )
 
 
 def process_single_video(video_file, idx):
     segment_starts, segment_ends = video_start_end_generator(video_file, CLIP_DURATION)
-    video_segments = [
-        (video_file, s, e, FRAME_SAMPLING_RATE)
-        for s, e in zip(segment_starts, segment_ends)
-    ]
-    if not video_segments:
+    if not segment_starts:
         return [], []
 
-    if CACHE_ANNOTATION:
-        annotate_results = [cached_annotate(*seg) for seg in video_segments]
-        embeddings = [cached_generate_video_embedding(*seg) for seg in video_segments]
-    else:
-        raise NotImplementedError("Non-cached processing is not implemented yet")
+    # --- Step 1: Read raw frames once per segment ---
+    # Each segment's frames are read exactly once and reused for both annotation
+    # (VLM) and CLIP embedding, eliminating the previous double-decode.
+    segments_raw_frames = []
+    for s, e in zip(segment_starts, segment_ends):
+        frames = read_video_frames_raw(video_file, s, e, FRAME_SAMPLING_RATE)
+        segments_raw_frames.append(frames or [])
+
+    # Annotate all segments in parallel (I/O-bound VLM calls).
+    # ThreadPoolExecutor uses threads, not OS processes; NUM_PROCESSES controls
+    # the outer video-level parallelism (joblib, also thread-based here) and
+    # serves as a reasonable upper bound for concurrent annotation threads too.
+    annotate_results = [None] * len(segment_starts)
+    max_annotation_threads = min(len(segment_starts), max(1, NUM_PROCESSES))
+    with ThreadPoolExecutor(max_workers=max_annotation_threads) as pool:
+        future_to_idx = {
+            pool.submit(
+                _process_segment_annotation, video_file, s, e, frames
+            ): i
+            for i, (s, e, frames) in enumerate(
+                zip(segment_starts, segment_ends, segments_raw_frames)
+            )
+        }
+        for future in as_completed(future_to_idx):
+            i = future_to_idx[future]
+            try:
+                annotate_results[i] = future.result()
+            except Exception as exc:
+                print(f"Annotation failed for segment {i} of {video_file}: {exc}")
+                from utils.embedding import _get_default_annotation
+                annotate_results[i] = _get_default_annotation()
+
+    # --- Step 3: Generate CLIP embeddings (GPU/CPU-bound, sequential) ---
+    embeddings = [
+        generate_video_embedding(
+            video_file, s, e, FRAME_SAMPLING_RATE, EMBEDDING_DIM,
+            preloaded_frames=frames,
+        )
+        for s, e, frames in zip(segment_starts, segment_ends, segments_raw_frames)
+    ]
 
     video_file_name = os.path.basename(video_file)
     video_file_path = os.path.dirname(video_file)
     sqlite_batch = []
     milvus_batch = []
-    for i, (s, e, emb, anno) in enumerate(
-        zip(segment_starts, segment_ends, embeddings, annotate_results)
-    ):
+    for s, e, emb, anno in zip(segment_starts, segment_ends, embeddings, annotate_results):
         if emb is None:
             continue
-        # SQLite batch
         sqlite_batch.append((video_file_name, video_file_path, s, e, anno))
-        # Milvus batch
         milvus_batch.append(
             {
                 "video_file_name": video_file_name,
@@ -135,6 +157,8 @@ def train():
     video_file_list = get_video_file_list(data_root, file_format)
     client = get_milvus_client()
 
+    # Accumulated data buffers — flushed only when they reach BATCH_SIZE_DB,
+    # avoiding the previous pattern of micro-inserting after every video.
     sqlite_data = []
     milvus_data = []
 
@@ -150,25 +174,23 @@ def train():
                 sqlite_data.extend(sqlite_batch)
                 milvus_data.extend(milvus_batch)
 
-                while len(sqlite_data) >= BATCH_SIZE_DB:
-                    to_insert_sql = sqlite_data[:BATCH_SIZE_DB]
-                    to_insert_mil = milvus_data[:BATCH_SIZE_DB]
-                    batch_insert_sqlite(to_insert_sql)
-                    batch_insert_milvus(client, COLLECTION_NAME, to_insert_mil)
-
-                    sqlite_data = sqlite_data[BATCH_SIZE_DB:]
-                    milvus_data = milvus_data[BATCH_SIZE_DB:]
-
-                batch_insert_sqlite(sqlite_data)
-                batch_insert_milvus(client, COLLECTION_NAME, milvus_data)
-
-                sqlite_data = []
-                milvus_data = []
+            # Flush complete batches; leave the remainder in the buffer so it
+            # accumulates across outer iterations until the threshold is met.
+            while len(sqlite_data) >= BATCH_SIZE_DB:
+                batch_insert_sqlite(sqlite_data[:BATCH_SIZE_DB])
+                batch_insert_milvus(client, COLLECTION_NAME, milvus_data[:BATCH_SIZE_DB])
+                sqlite_data = sqlite_data[BATCH_SIZE_DB:]
+                milvus_data = milvus_data[BATCH_SIZE_DB:]
 
             torch.cuda.empty_cache()
             gc.collect()
 
             pbar.update(len(batch_videos))
+
+    # Flush any remaining records that did not fill a full batch.
+    if sqlite_data:
+        batch_insert_sqlite(sqlite_data)
+        batch_insert_milvus(client, COLLECTION_NAME, milvus_data)
 
     print("All videos processed & all data inserted!")
 
