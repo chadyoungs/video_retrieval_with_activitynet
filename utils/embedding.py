@@ -1,6 +1,7 @@
 import base64
 import json
 import os
+import re
 import time
 from pathlib import Path
 
@@ -299,30 +300,41 @@ def annotate(
     """
     )
 
+    # Use Ollama structured-output (JSON Schema with enum constraints).
+    # This replaces the plain "format": "json" string and removes the
+    # OpenAI-only "response_format" field that Ollama silently ignores.
+    # Constrained decoding enforces valid enum values server-side, which
+    # eliminates most validate_annotation_output retries.
+    json_schema = {
+        "type": "object",
+        "properties": {
+            "scene_env": {"type": "string", "enum": ANNOTATION_RULES["scene_env"]},
+            "scene_type": {"type": "string", "enum": ANNOTATION_RULES["scene_type"]},
+            "weather": {"type": "string", "enum": ANNOTATION_RULES["weather"]},
+            "lighting": {"type": "string", "enum": ANNOTATION_RULES["lighting"]},
+            "time_of_day": {"type": "string", "enum": ANNOTATION_RULES["time_of_day"]},
+            "person_count": {
+                "type": "string",
+                "enum": ANNOTATION_RULES["person_count"],
+            },
+        },
+        "required": [
+            "scene_env",
+            "scene_type",
+            "weather",
+            "lighting",
+            "time_of_day",
+            "person_count",
+        ],
+    }
     payload = {
         "model": OLLAMA_MODEL,
         "messages": [{"role": "user", "content": prompt, "images": images}],
         "stream": False,
-        "format": "json",
-        "response_format": {
-            "type": "object",
-            "properties": {
-                "scene_env": {"type": "string"},
-                "scene_type": {"type": "string"},
-                "weather": {"type": "string"},
-                "lighting": {"type": "string"},
-                "time_of_day": {"type": "string"},
-                "person_count": {"type": "string"},
-            },
-            "required": [
-                "scene_env",
-                "scene_type",
-                "weather",
-                "lighting",
-                "time_of_day",
-                "person_count",
-            ],
-        },
+        "format": json_schema,
+        # Disable chain-of-thought for qwen3 reasoning models so that no
+        # <think>…</think> preamble appears before the JSON output.
+        "options": {"think": False},
     }
 
     for attempt in range(max_retries + 1):
@@ -341,7 +353,14 @@ def annotate(
             resp.raise_for_status()
 
             result = resp.json()
-            content = result["message"]["content"].strip()
+            message = result.get("message", {})
+            content = message.get("content", "").strip()
+            if not content:
+                print(f"Attempt {attempt+1}: Empty content in response")
+                continue
+            # Strip any <think>…</think> reasoning block emitted by qwen3
+            # models when constrained decoding does not fully suppress it.
+            content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
             output = json.loads(content)
 
             if validate_annotation_output(output):
