@@ -19,7 +19,7 @@ CLIP_MODEL_NAME = "openai/clip-vit-base-patch32"
 
 # data
 CLIP_DURATION = 10  # seconds
-FRAME_SAMPLING_RATE = 25  # frame sampling
+FRAME_SAMPLING_RATE = 10  # frame sampling
 
 # computation
 BATCH_VIDEO = 2  # number of videos per outer batch
