@@ -1,4 +1,3 @@
-
 # database
 MILVUS_HOST = "localhost"
 MILVUS_PORT = "19530"
@@ -29,8 +28,6 @@ NUM_WORKERS = 1  # for torch
 NUM_PROCESSES = (
     2  # parallel video workers, local model can't handle with more than 2 processes
 )
-
-CLIP_BATCH_SIZE = 6  # batch size for CLIP embedding generation
 
 # Maximum number of frames sent to the VLM for scene annotation per segment.
 # Sending 4 keyframes instead of all sampled frames dramatically

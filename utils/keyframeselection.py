@@ -1,12 +1,10 @@
 # modified from 'https://github.com/amanwalia123/KeyFramesExtraction'
+import operator
 from collections import Counter
 
 import cv2
-import operator
 import numpy as np
-
 from scipy.signal import argrelextrema
-
 
 # fixed threshold value
 THRESH = 0.2
@@ -18,6 +16,7 @@ def pil_to_yuv(pil_image):
     yuv_frame = cv2.cvtColor(rgb_frame, cv2.COLOR_BGR2YUV)
 
     return yuv_frame
+
 
 class FrameData:
     def __init__(self, id, frame, value):
@@ -58,8 +57,8 @@ def cal_attr(frames):
 
 
 def rel_change(a, b):
-   x = (b - a) / max(a, b)
-   return x
+    x = (b - a) / max(a, b) if max(a, b) != 0 else 0.0
+    return x
 
 
 def using_top_order(new_frames, top_n):
@@ -72,22 +71,29 @@ def using_top_order(new_frames, top_n):
 def using_threshold(new_frames, thresh=THRESH):
     idx_list = []
     for i in range(1, len(new_frames)):
-        if (abs(rel_change(np.float64(new_frames[i - 1].value), np.float64(new_frames[i].value))) >= thresh):
+        if (
+            abs(
+                rel_change(
+                    np.float64(new_frames[i - 1].value), np.float64(new_frames[i].value)
+                )
+            )
+            >= thresh
+        ):
             idx_list.append(new_frames[i].id)
-    
+
     return idx_list
 
 
-def smooth(x, window_len=13, window='hanning'):
+def smooth(x, window_len=13, window="hanning"):
     """smooth the data using a window with requested size.
-    
+
     This method is based on the convolution of a scaled window with the signal.
-    The signal is prepared by introducing reflected copies of the signal 
+    The signal is prepared by introducing reflected copies of the signal
     (with the window size) in both ends so that transient parts are minimized
     in the begining and end part of the output signal.
-    
+
     input:
-        x: the input signal 
+        x: the input signal
         window_len: the dimension of the smoothing window
         window: the type of window from 'flat', 'hanning', 'hamming', 'bartlett', 'blackman'
             flat window will produce a moving average smoothing.
@@ -105,20 +111,21 @@ def smooth(x, window_len=13, window='hanning'):
     if window_len < 3:
         return x
 
-    if not window in ['flat', 'hanning', 'hamming', 'bartlett', 'blackman']:
-        raise ValueError("Window is one of 'flat', 'hanning', 'hamming', 'bartlett', 'blackman'")
+    if window not in ["flat", "hanning", "hamming", "bartlett", "blackman"]:
+        raise ValueError(
+            "Window is one of 'flat', 'hanning', 'hamming', 'bartlett', 'blackman'"
+        )
 
-    s = np.r_[2 * x[0] - x[window_len:1:-1],
-              x, 2 * x[-1] - x[-1:-window_len:-1]]
+    s = np.r_[2 * x[0] - x[window_len:1:-1], x, 2 * x[-1] - x[-1:-window_len:-1]]
 
-    if window == 'flat':  # moving average
-        w = np.ones(window_len, 'd')
+    if window == "flat":  # moving average
+        w = np.ones(window_len, "d")
     else:
         w = getattr(np, window)(window_len)
 
-    y = np.convolve(w / w.sum(), s, mode='same')
+    y = np.convolve(w / w.sum(), s, mode="same")
 
-    return y[window_len - 1:-window_len + 1]
+    return y[window_len - 1 : -window_len + 1]
 
 
 def using_local_maxima(frame_diffs, len_window=SMOOTH_WINDOW_SIZE):
@@ -132,8 +139,14 @@ def using_local_maxima(frame_diffs, len_window=SMOOTH_WINDOW_SIZE):
 def get_final_idx_list(top_order_idx_list, threshold_idx_list, local_maxima_idx_list):
     idx_list = []
 
-    sum_array = np.concatenate((np.array(top_order_idx_list), np.array(threshold_idx_list), np.array(local_maxima_idx_list)))
-    
+    sum_array = np.concatenate(
+        (
+            np.array(top_order_idx_list),
+            np.array(threshold_idx_list),
+            np.array(local_maxima_idx_list),
+        )
+    )
+
     count = Counter(sum_array)
     idx_count_pairs = count.most_common()
 
@@ -150,7 +163,7 @@ def select_frames(frames, top_n):
         return []
     if len(frames) <= top_n:
         return frames
-    
+
     # calculate the relative change between consecutive frames
     new_frames, frames_diff = cal_attr(frames)
 
@@ -163,6 +176,8 @@ def select_frames(frames, top_n):
     # using local maxima
     local_maxima_idx_list = using_local_maxima(frames_diff)
 
-    final_idx_list = get_final_idx_list(top_order_idx_list, threshold_idx_list, local_maxima_idx_list)
+    final_idx_list = get_final_idx_list(
+        top_order_idx_list, threshold_idx_list, local_maxima_idx_list
+    )
 
-    return final_idx_list[: top_n]
+    return [frames[i] for i in final_idx_list[:top_n]]

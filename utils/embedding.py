@@ -14,9 +14,9 @@ from PIL import Image
 # from transformers import CLIPModel, CLIPProcessor
 from transformers import AutoModelForZeroShotImageClassification, AutoProcessor
 
-from utils.config import (CLIP_BATCH_SIZE, CLIP_MODEL_NAME, MAX_RETRIES,
-                          N_VLM_FRAMES, OLLAMA_API_URL, OLLAMA_MODEL,
-                          OLLAMA_TIMEOUT, RETRY_BACKOFF_FACTOR)
+from utils.config import (CLIP_MODEL_NAME, MAX_RETRIES, N_VLM_FRAMES,
+                          OLLAMA_API_URL, OLLAMA_MODEL, OLLAMA_TIMEOUT,
+                          RETRY_BACKOFF_FACTOR)
 from utils.keyframeselection import select_frames
 
 os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
@@ -410,17 +410,16 @@ def generate_video_embedding(
 
     frame_embeddings = []
     with torch.no_grad():
-        for i in range(0, len(pil_frames), CLIP_BATCH_SIZE):
-            batch_frames = pil_frames[i : i + CLIP_BATCH_SIZE]
+        batch_frames = select_frames(pil_frames, N_VLM_FRAMES)
 
-            inputs = _processor(images=batch_frames, return_tensors="pt")
+        inputs = _processor(images=batch_frames, return_tensors="pt")
 
-            image_features = _model.get_image_features(**inputs).pooler_output
+        image_features = _model.get_image_features(**inputs).pooler_output
 
-            normalized = image_features / image_features.norm(p=2, dim=-1, keepdim=True)
-            frame_embeddings.extend(normalized.squeeze().cpu().numpy())
+        normalized = image_features / image_features.norm(p=2, dim=-1, keepdim=True)
+        frame_embeddings.extend(normalized.squeeze().cpu().numpy())
 
-            del inputs, image_features, normalized
+        del inputs, image_features, normalized
 
     # Release GPU cache once after all mini-batches, not on every iteration.
     if torch.cuda.is_available():

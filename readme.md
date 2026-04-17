@@ -2,7 +2,13 @@
 
 ## Local resources
 - NVIDIA-GeForce RTX 3060 Ti, 8G
+
 ## Usage
+- Recommend using Anaconda to activate a virtual environment
+  - Python Version, ** 3.10.19 **
+
+- ``pip install -r requiremnts.txt`` at first
+
 - Step1. ``python ./database/milvus_db.py`` & ``python ./database/sql_db.py`` to setup the milvus database & sqlite database
 - Step2. ``python train.py`` to collect embeddings & annotate of training data
 - Step3. ``python retrieval.py``

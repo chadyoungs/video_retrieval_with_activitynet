@@ -19,7 +19,7 @@ def get_demo_sample_image(video_file_loc, time_loc, dest_file_loc):
             break
 
         if frame_count == time_loc * int(cap.get(cv2.CAP_PROP_FPS)):
-            success = cv2.imwrite(dest_file_loc, frame)
+            cv2.imwrite(dest_file_loc, frame)
             break
 
         frame_count += 1
