@@ -11,7 +11,7 @@ from PIL import Image
 
 from database.milvus_db import get_milvus_client, search_milvus
 from database.sql_db import search_sql
-from utils.config import (MILVUS_HOST, MILVUS_PORT)
+from utils.config import MILVUS_HOST, MILVUS_PORT
 from utils.embedding import get_model, get_processor
 
 # Obtain (or create) the shared Milvus singleton.  This replaces the previous

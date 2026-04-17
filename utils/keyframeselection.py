@@ -4,10 +4,8 @@ from collections import Counter
 import cv2
 import operator
 import numpy as np
-import matplotlib.pyplot as plt
-import sys
-from scipy.signal import argrelextrema
 
+from scipy.signal import argrelextrema
 
 
 # fixed threshold value
