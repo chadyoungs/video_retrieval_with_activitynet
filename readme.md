@@ -1,5 +1,5 @@
 # Video Retrieval with ActivityNet
-
+> A VLM application specified on video retrieval with ActivityNet Datase
 ## Local resources
 - NVIDIA-GeForce RTX 3060 Ti, 8G
 
