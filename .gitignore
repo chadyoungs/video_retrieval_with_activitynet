@@ -3,5 +3,6 @@ __pycache__
 *.db
 *.json
 *.safetensors
+.ruff_cache
 json
 sqlite3
