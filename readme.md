@@ -1,5 +1,7 @@
 # Video Retrieval with ActivityNet
 
+## Local resources
+- NVIDIA-GeForce RTX 3060 Ti, 8G
 ## Usage
 - Step1. ``python ./database/milvus_db.py`` & ``python ./database/sql_db.py`` to setup the milvus database & sqlite database
 - Step2. ``python train.py`` to collect embeddings & annotate of training data
@@ -32,3 +34,6 @@ This comprehensive solution allows users to perform efficient and accurate video
 ### local Milvus related
 - install milvus by following the official Guide
 - Dataset visualization: **Attu**
+
+### cuda
+- model and data should loaded with cuda while GPU is available (with more GPU resources)

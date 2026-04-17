@@ -1,18 +1,9 @@
 import sys
 from pathlib import Path
-from typing import Dict, List
 
 sys.path.append(str(Path(__file__).parent.parent))
 
-from pymilvus import (
-    Collection,
-    CollectionSchema,
-    DataType,
-    FieldSchema,
-    MilvusClient,
-    connections,
-    utility,
-)
+from pymilvus import DataType, MilvusClient
 
 from utils.config import ALIAS, COLLECTION_NAME, MILVUS_HOST, MILVUS_PORT
 from utils.embedding import EMBEDDING_DIM
@@ -76,12 +67,11 @@ def create_milvus_collection(client, collection_name, dim):
 def batch_insert_milvus(client, collection_name, batch_data):
     if len(batch_data) == 0:
         return None
+
     return client.insert(collection_name=collection_name, data=batch_data)
 
 
-def search_milvus(query_embedding: list, limit: int = 5) -> list:
-    client = get_milvus_client()
-
+def search_milvus(client, query_embedding: list, limit: int = 5) -> list:
     try:
         results = client.search(
             collection_name=COLLECTION_NAME,

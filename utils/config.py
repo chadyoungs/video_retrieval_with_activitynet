@@ -1,4 +1,3 @@
-import multiprocessing
 
 # database
 MILVUS_HOST = "localhost"
@@ -23,15 +22,17 @@ CLIP_DURATION = 10  # seconds
 FRAME_SAMPLING_RATE = 25  # frame sampling
 
 # computation
-NUM_WORKERS = 2
-# Process multiple videos in parallel; each thread can pipeline annotation I/O with GPU work.
 BATCH_VIDEO = 2  # number of videos per outer batch
-BATCH_SIZE_DB = 100  # batch size for database insertion
-NUM_PROCESSES = max(1, multiprocessing.cpu_count() // 2)  # parallel video workers
+BATCH_SIZE_DB = 5  # batch size for database insertion
+# NUM_PROCESSES = max(1, multiprocessing.cpu_count() // 2)  # parallel video workers
+NUM_WORKERS = 1  # for torch
+NUM_PROCESSES = (
+    2  # parallel video workers, local model can't handle with more than 2 processes
+)
 
 CLIP_BATCH_SIZE = 6  # batch size for CLIP embedding generation
 
 # Maximum number of frames sent to the VLM for scene annotation per segment.
-# Sending 5 keyframes instead of all sampled frames dramatically
+# Sending 4 keyframes instead of all sampled frames dramatically
 # reduces VLM input size while preserving annotation quality.
-N_VLM_FRAMES = 5
+N_VLM_FRAMES = 4

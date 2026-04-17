@@ -1,4 +1,4 @@
-from transformers import AutoModel, AutoProcessor, CLIPModel, CLIPProcessor
+from transformers import CLIPModel, CLIPProcessor
 
 clip_path = "./models/clip-vit-base-patch32"
 model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32")

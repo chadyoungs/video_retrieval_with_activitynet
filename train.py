@@ -5,7 +5,6 @@ import sys
 sys.path.append(str(pathlib.Path(__file__).parent))
 
 import gc
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import cv2
@@ -14,40 +13,18 @@ import torch
 from joblib import Parallel, delayed
 from tqdm import tqdm
 
-from database.milvus_db import batch_insert_milvus
+from database.milvus_db import batch_insert_milvus, get_milvus_client
 from database.sql_db import batch_insert_sqlite
-from utils.config import (
-    ALIAS,
-    BATCH_SIZE_DB,
-    BATCH_VIDEO,
-    CLIP_DURATION,
-    COLLECTION_NAME,
-    FRAME_SAMPLING_RATE,
-    MILVUS_HOST,
-    MILVUS_PORT,
-    NUM_PROCESSES,
-    NUM_WORKERS,
-)
-from utils.embedding import EMBEDDING_DIM, annotate, generate_video_embedding, read_video_frames_raw
-from pymilvus import MilvusClient
+from utils.config import (BATCH_SIZE_DB, BATCH_VIDEO, CLIP_DURATION,
+                          COLLECTION_NAME, FRAME_SAMPLING_RATE, NUM_PROCESSES,
+                          NUM_WORKERS)
+from utils.embedding import (EMBEDDING_DIM, annotate, generate_video_embedding,
+                             read_video_frames_raw)
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
-_client = None
-
-
-def get_milvus_client():
-    global _client
-    if _client is None:
-        try:
-            _client = MilvusClient(
-                uri=f"http://{MILVUS_HOST}:{MILVUS_PORT}", alias=ALIAS
-            )
-            print(f"Connected to Milvus: {MILVUS_HOST}:{MILVUS_PORT}")
-        except Exception as e:
-            raise RuntimeError(f"Milvus connection failed: {e}")
-    return _client
+client = get_milvus_client()
 
 
 def get_video_file_list(data_root, file_format="avi"):
@@ -64,6 +41,10 @@ def video_start_end_generator(video_file, clip_duration):
     if video_duration <= clip_duration:
         return [0], [video_duration]
 
+    # Generate non-overlapping segments; the last segment is adjusted to fit the end of the video.
+    # However, overlapping segments are recommended for better retrieval performance,
+    # as they provide more granular coverage of the video content.
+    # The current non-overlapping approach is a simplification for demonstration purposes.
     segment_starts = np.arange(0, video_duration, clip_duration)
     segment_ends = segment_starts + clip_duration
 
@@ -71,18 +52,6 @@ def video_start_end_generator(video_file, clip_duration):
     segment_starts[-1] = video_duration - clip_duration
 
     return segment_starts.tolist(), segment_ends.tolist()
-
-
-def _process_segment_annotation(video_file, segment_start, segment_end, raw_frames):
-    """Run annotation for a single segment using pre-read frames (I/O-bound)."""
-    return annotate(
-        video_file,
-        segment_start,
-        segment_end,
-        FRAME_SAMPLING_RATE,
-        max_retries=1,
-        preloaded_frames=raw_frames,
-    )
 
 
 def process_single_video(video_file, idx):
@@ -98,34 +67,28 @@ def process_single_video(video_file, idx):
         frames = read_video_frames_raw(video_file, s, e, FRAME_SAMPLING_RATE)
         segments_raw_frames.append(frames or [])
 
-    # Annotate all segments in parallel (I/O-bound VLM calls).
-    # ThreadPoolExecutor uses threads, not OS processes; NUM_PROCESSES controls
-    # the outer video-level parallelism (joblib, also thread-based here) and
-    # serves as a reasonable upper bound for concurrent annotation threads too.
-    annotate_results = [None] * len(segment_starts)
-    max_annotation_threads = min(len(segment_starts), max(1, NUM_PROCESSES))
-    with ThreadPoolExecutor(max_workers=max_annotation_threads) as pool:
-        future_to_idx = {
-            pool.submit(
-                _process_segment_annotation, video_file, s, e, frames
-            ): i
-            for i, (s, e, frames) in enumerate(
-                zip(segment_starts, segment_ends, segments_raw_frames)
-            )
-        }
-        for future in as_completed(future_to_idx):
-            i = future_to_idx[future]
-            try:
-                annotate_results[i] = future.result()
-            except Exception as exc:
-                print(f"Annotation failed for segment {i} of {video_file}: {exc}")
-                from utils.embedding import _get_default_annotation
-                annotate_results[i] = _get_default_annotation()
+    # --- Step 2： Annotate all segments in parallel (I/O-bound VLM calls).
+    max_retry = 2
+    annotate_results = [
+        annotate(
+            video_file,
+            s,
+            e,
+            FRAME_SAMPLING_RATE,
+            max_retry,
+            preloaded_frames=frames,
+        )
+        for s, e, frames in zip(segment_starts, segment_ends, segments_raw_frames)
+    ]
 
     # --- Step 3: Generate CLIP embeddings (GPU/CPU-bound, sequential) ---
     embeddings = [
         generate_video_embedding(
-            video_file, s, e, FRAME_SAMPLING_RATE, EMBEDDING_DIM,
+            video_file,
+            s,
+            e,
+            FRAME_SAMPLING_RATE,
+            EMBEDDING_DIM,
             preloaded_frames=frames,
         )
         for s, e, frames in zip(segment_starts, segment_ends, segments_raw_frames)
@@ -135,7 +98,9 @@ def process_single_video(video_file, idx):
     video_file_path = os.path.dirname(video_file)
     sqlite_batch = []
     milvus_batch = []
-    for s, e, emb, anno in zip(segment_starts, segment_ends, embeddings, annotate_results):
+    for s, e, emb, anno in zip(
+        segment_starts, segment_ends, embeddings, annotate_results
+    ):
         if emb is None:
             continue
         sqlite_batch.append((video_file_name, video_file_path, s, e, anno))
@@ -178,7 +143,9 @@ def train():
             # accumulates across outer iterations until the threshold is met.
             while len(sqlite_data) >= BATCH_SIZE_DB:
                 batch_insert_sqlite(sqlite_data[:BATCH_SIZE_DB])
-                batch_insert_milvus(client, COLLECTION_NAME, milvus_data[:BATCH_SIZE_DB])
+                batch_insert_milvus(
+                    client, COLLECTION_NAME, milvus_data[:BATCH_SIZE_DB]
+                )
                 sqlite_data = sqlite_data[BATCH_SIZE_DB:]
                 milvus_data = milvus_data[BATCH_SIZE_DB:]
 

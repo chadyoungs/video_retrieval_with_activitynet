@@ -4,27 +4,21 @@ from pathlib import Path
 
 sys.path.append(str(Path(__file__).parent))
 
-from typing import Dict, List, Tuple
+from typing import Dict, List
 
 import torch
 from PIL import Image
 
 from database.milvus_db import get_milvus_client, search_milvus
 from database.sql_db import search_sql
-from utils.config import (
-    CLIP_DURATION,
-    COLLECTION_NAME,
-    FRAME_SAMPLING_RATE,
-    MILVUS_HOST,
-    MILVUS_PORT,
-)
-from utils.embedding import DEVICE, EMBEDDING_DIM, get_model, get_processor
+from utils.config import (MILVUS_HOST, MILVUS_PORT)
+from utils.embedding import get_model, get_processor
 
 # Obtain (or create) the shared Milvus singleton.  This replaces the previous
 # pattern of creating a second MilvusClient + connections.connect() pair here,
 # which resulted in two separate connections to the same server.
 try:
-    get_milvus_client()
+    client = get_milvus_client()
     print(f"Successfully connected to Milvus at {MILVUS_HOST}:{MILVUS_PORT}")
 except Exception as e:
     print(f"Failed to connect to Milvus: {e}")
@@ -41,7 +35,7 @@ def get_text_embedding(query_text: str) -> List[float]:
     _model = get_model()
     text_inputs = _processor(
         text=query_text, return_tensors="pt", padding=True, truncation=True
-    ).to(DEVICE)
+    )
     with torch.no_grad():
         text_features = _model.get_text_features(**text_inputs).pooler_output
     return normalize_feature(text_features)
@@ -57,7 +51,7 @@ def get_image_embedding(query_img_path: str) -> List[float]:
 
     _processor = get_processor()
     _model = get_model()
-    img_inputs = _processor(images=img, return_tensors="pt").to(DEVICE)
+    img_inputs = _processor(images=img, return_tensors="pt")
     with torch.no_grad():
         img_features = _model.get_image_features(**img_inputs).pooler_output
     return normalize_feature(img_features)
@@ -82,7 +76,7 @@ def hybrid_retrieval(
     :return: fused retrieval results (sorted by final score in descending order)
     """
     # 1. Execute Milvus vector retrieval
-    milvus_hits = search_milvus(query_embedding, limit=milvus_limit)
+    milvus_hits = search_milvus(client, query_embedding, limit=milvus_limit)
     if not milvus_hits:
         print("Milvus search returned empty results")
 
@@ -195,13 +189,13 @@ def retrieval_with_image(
 
     print("--- Top Retrieval Results ---")
     for idx, res in enumerate(hybrid_results, 1):
+        print(res, type(res))
         print(f"\nRank {idx}:")
         print(f"  Video: {res['video_file_path']}/{res['video_file_name']}")
         print(f"  Segment: {res['segment_start']}s - {res['segment_end']}s")
         print(f"  Milvus Score: {res['milvus_score']:.4f}")
         print(f"  SQL Score: {res['sql_score']:.4f}")
         print(f"  Final Score: {res['final_score']:.4f}")
-        print(f"  Distance (Milvus): {res.get('distance', 'N/A'):.4f}")
 
     return hybrid_results
 

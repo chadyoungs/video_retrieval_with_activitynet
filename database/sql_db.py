@@ -1,18 +1,26 @@
 #!/usr/bin/env python3
-import json
 import sqlite3
 from typing import Dict, List
 
 DB_NAME = "./database/video_metadata.db"
 
 
-def init_db():
+def get_db_connection():
     conn = sqlite3.connect(DB_NAME)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def init_db():
+    conn = get_db_connection()
     c = conn.cursor()
-    c.execute("""
+    c.execute(
+        """
         DROP TABLE IF EXISTS video_clips
-    """)
-    c.execute("""
+    """
+    )
+    c.execute(
+        """
         CREATE TABLE IF NOT EXISTS video_clips (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             video_file_name TEXT NOT NULL,
@@ -27,13 +35,28 @@ def init_db():
             person_count TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
-    """)
+    """
+    )
     # Column names are validated against a fixed allowlist to prevent any
     # accidental SQL injection if this tuple is ever widened.
     _ANNOTATION_COLUMNS = frozenset(
-        ("scene_env", "scene_type", "weather", "lighting", "time_of_day", "person_count")
+        (
+            "scene_env",
+            "scene_type",
+            "weather",
+            "lighting",
+            "time_of_day",
+            "person_count",
+        )
     )
-    for col in ("scene_env", "scene_type", "weather", "lighting", "time_of_day", "person_count"):
+    for col in (
+        "scene_env",
+        "scene_type",
+        "weather",
+        "lighting",
+        "time_of_day",
+        "person_count",
+    ):
         assert col in _ANNOTATION_COLUMNS, f"Unexpected column name: {col}"
         c.execute(f"CREATE INDEX IF NOT EXISTS idx_{col} ON video_clips({col})")
     conn.commit()
@@ -41,7 +64,7 @@ def init_db():
 
 
 def save_to_db(video_file_name, video_file_path, segment_start, segment_end, anno):
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_db_connection()
     c = conn.cursor()
     c.execute(
         """
@@ -68,10 +91,10 @@ def save_to_db(video_file_name, video_file_path, segment_start, segment_end, ann
 
 
 def batch_insert_sqlite(batch_data):
+    conn = get_db_connection()
     if not batch_data:
         return "Empty batch"
 
-    conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
 
     conn.isolation_level = None
@@ -112,12 +135,6 @@ def batch_insert_sqlite(batch_data):
         conn.close()
 
 
-def get_db_connection():
-    conn = sqlite3.connect(DB_NAME)
-    conn.row_factory = sqlite3.Row
-    return conn
-
-
 def query_annotation_by_conditions(conditions: Dict, limit: int = 5) -> List[Dict]:
     """
     Return video clips that match *any* of the supplied annotation conditions,
@@ -129,7 +146,6 @@ def query_annotation_by_conditions(conditions: Dict, limit: int = 5) -> List[Dic
     if not conditions:
         return []
 
-    conn = None
     try:
         conn = get_db_connection()
         cursor = conn.cursor()

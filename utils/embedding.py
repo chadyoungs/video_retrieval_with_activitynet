@@ -1,29 +1,25 @@
 import base64
 import json
 import os
-import re
+import sys
 import time
 from pathlib import Path
 
+sys.path.append(str(Path(__file__).parent.parent))
 import cv2
 import numpy as np
 import requests
 import torch
 from PIL import Image
-
 # from transformers import CLIPModel, CLIPProcessor
 from transformers import AutoModelForZeroShotImageClassification, AutoProcessor
 
-from utils.config import (
-    CLIP_BATCH_SIZE,
-    CLIP_MODEL_NAME,
-    MAX_RETRIES,
-    N_VLM_FRAMES,
-    OLLAMA_API_URL,
-    OLLAMA_MODEL,
-    OLLAMA_TIMEOUT,
-    RETRY_BACKOFF_FACTOR,
-)
+from utils.config import (CLIP_BATCH_SIZE, CLIP_MODEL_NAME, MAX_RETRIES,
+                          N_VLM_FRAMES, OLLAMA_API_URL, OLLAMA_MODEL,
+                          OLLAMA_TIMEOUT, RETRY_BACKOFF_FACTOR)
+from utils.keyframeselection import select_frames
+
+os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
 
 ANNOTATION_RULES = {
     "scene_env": ["indoor", "outdoor", "semi_outdoor"],
@@ -73,11 +69,9 @@ def get_processor():
 def get_model():
     global _model
     if _model is None:
-        _model = (
-            AutoModelForZeroShotImageClassification.from_pretrained(CLIP_MODEL_NAME)
-            .to(DEVICE)
-            .eval()
-        )
+        _model = AutoModelForZeroShotImageClassification.from_pretrained(
+            CLIP_MODEL_NAME
+        ).eval()
     return _model
 
 
@@ -86,6 +80,7 @@ def get_model():
 # CLIP ViT-B/32 always exposes projection_dim=512; we hard-code it here so that
 # milvus_db.py can read EMBEDDING_DIM without triggering a full model load.
 EMBEDDING_DIM = 512
+
 
 # Keep module-level `model` and `processor` as lazy proxies so existing code
 # that does `from utils.embedding import model, processor` keeps working.
@@ -146,7 +141,10 @@ def read_video_frames_raw(video_file_path, segment_start, segment_end, sample_ra
             if not ret:
                 break
 
-            if start_frame <= frame_count < end_frame and frame_count % sample_rate == 0:
+            if (
+                start_frame <= frame_count < end_frame
+                and frame_count % sample_rate == 0
+            ):
                 frames.append(frame)
 
             frame_count += 1
@@ -216,18 +214,6 @@ def _get_default_annotation():
     }
 
 
-def _select_keyframes(frames, n):
-    """Return exactly *n* uniformly-spaced frames from *frames* (or fewer if
-    *frames* has fewer than *n* elements).  Returns an empty list when *n* <= 0."""
-    if not frames or n <= 0:
-        return []
-    if len(frames) <= n:
-        return frames
-    # Integer arithmetic avoids a numpy allocation for the typical case of n=3.
-    indices = [int(i * (len(frames) - 1) / (n - 1)) for i in range(n)]
-    return [frames[i] for i in indices]
-
-
 def annotate(
     video_file_path,
     segment_start,
@@ -261,11 +247,11 @@ def annotate(
         return _get_default_annotation()
 
     # Select a small number of representative keyframes to reduce VLM payload.
-    keyframes = _select_keyframes(raw_frames, N_VLM_FRAMES)
+    keyframes = select_frames(raw_frames, N_VLM_FRAMES)
     images = [frame_to_base64(f) for f in keyframes]
 
     prompt = (
-        f"""
+        """
         You are a strict video scene annotation expert.
         YOU MUST FOLLOW ALL RULES 100% STRICTLY.
         YOU ONLY OUTPUT A SINGLE JSON OBJECT, NO OTHER TEXT, NO EXPLANATION, NO MARKDOWN, NO CHATTING.
@@ -300,11 +286,6 @@ def annotate(
     """
     )
 
-    # Use Ollama structured-output (JSON Schema with enum constraints).
-    # This replaces the plain "format": "json" string and removes the
-    # OpenAI-only "response_format" field that Ollama silently ignores.
-    # Constrained decoding enforces valid enum values server-side, which
-    # eliminates most validate_annotation_output retries.
     json_schema = {
         "type": "object",
         "properties": {
@@ -358,9 +339,6 @@ def annotate(
             if not content:
                 print(f"Attempt {attempt+1}: Empty content in response")
                 continue
-            # Strip any <think>…</think> reasoning block emitted by qwen3
-            # models when constrained decoding does not fully suppress it.
-            content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
             output = json.loads(content)
 
             if validate_annotation_output(output):
@@ -435,7 +413,7 @@ def generate_video_embedding(
         for i in range(0, len(pil_frames), CLIP_BATCH_SIZE):
             batch_frames = pil_frames[i : i + CLIP_BATCH_SIZE]
 
-            inputs = _processor(images=batch_frames, return_tensors="pt").to(DEVICE)
+            inputs = _processor(images=batch_frames, return_tensors="pt")
 
             image_features = _model.get_image_features(**inputs).pooler_output
 
@@ -454,4 +432,3 @@ def generate_video_embedding(
         f"[{segment_start:.1f}s - {segment_end:.1f}s]"
     )
     return ts_model(frame_embeddings)
-
