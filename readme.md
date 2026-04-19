@@ -15,7 +15,7 @@
   - retrieval option, text or image or video
 
 ## Principle
-The hybrid retrieval approach combines both keywords-based and semantic-based retrieval methods to achieve improved accuracy and efficiency. The system utilizes visual features (keywords, e.g. scene type, weather and so on) extracted from video frames along with semantic embeddings of the videos. This enables the application to retrieve videos that match user queries more effectively.
+The **hybrid retrieval** approach combines both keywords-based and semantic-based retrieval methods to achieve improved accuracy and efficiency. The system utilizes visual features (keywords, e.g. scene type, weather and so on) extracted from video frames along with semantic embeddings of the videos. This enables the application to retrieve videos that match user queries more effectively.
 
 ## Solution
 The system architecture consists of three main components:
