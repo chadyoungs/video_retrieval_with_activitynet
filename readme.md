@@ -44,5 +44,7 @@ This comprehensive solution allows users to perform efficient and accurate video
 - install milvus by following the official Guide
 - Dataset visualization: **Attu**
 
+### local ollama
+
 ### cuda
 - model and data should loaded with cuda while GPU is available (with more GPU resources)
