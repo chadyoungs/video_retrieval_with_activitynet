@@ -11,12 +11,20 @@ import numpy as np
 import requests
 import torch
 from PIL import Image
-# from transformers import CLIPModel, CLIPProcessor
-from transformers import AutoModelForZeroShotImageClassification, AutoProcessor
+from transformers import AutoModel, AutoProcessor
 
-from utils.config import (CLIP_MODEL_NAME, MAX_RETRIES, N_VLM_FRAMES,
-                          OLLAMA_API_URL, OLLAMA_MODEL, OLLAMA_TIMEOUT,
-                          RETRY_BACKOFF_FACTOR)
+from utils.config import (
+    ANNOTATION_MODEL_VERSION,
+    CLIP_MODEL_NAME,
+    EMBEDDING_DIM,
+    EMBEDDING_MODEL_VERSION,
+    MAX_RETRIES,
+    N_VLM_FRAMES,
+    OLLAMA_API_URL,
+    OLLAMA_MODEL,
+    OLLAMA_TIMEOUT,
+    RETRY_BACKOFF_FACTOR,
+)
 from utils.keyframeselection import select_frames
 
 os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
@@ -44,17 +52,32 @@ ANNOTATION_RULES = {
     ],
     "weather": ["sunny", "cloudy", "rainy", "foggy", "snowy", "unknown"],
     "lighting": ["bright", "normal", "dim", "indoor_light"],
-    "time_of_day": ["dawn", "morning", "noon", "afternoon", "dusk", "night", "unknown"],
+    "time_of_day": [
+        "dawn",
+        "morning",
+        "noon",
+        "afternoon",
+        "dusk",
+        "night",
+        "unknown",
+    ],
     "person_count": ["0", "single", "few", "crowd"],
+    "driving_context": [
+        "city_driving",
+        "highway",
+        "intersection",
+        "parking_lot",
+        "residential",
+        "unknown",
+    ],
+    "road_user_density": ["empty", "sparse", "moderate", "dense", "unknown"],
+    "traffic_flow": ["free_flow", "slow", "congested", "stopped", "unknown"],
 }
+ANNOTATION_REQUIRED_FIELDS = list(ANNOTATION_RULES.keys()) + ["semantic_summary"]
+MAX_SEMANTIC_SUMMARY_WORDS = 30
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
-# Lazy-load the CLIP model and processor so that importing this module does not
-# pay the full model-load cost unless inference is actually needed.  The two
-# module-level names are kept for backward compatibility; code that accessed
-# `model` / `processor` directly still works after the first call to either
-# get_model() or get_processor().
 _model = None
 _processor = None
 
@@ -69,21 +92,10 @@ def get_processor():
 def get_model():
     global _model
     if _model is None:
-        _model = AutoModelForZeroShotImageClassification.from_pretrained(
-            CLIP_MODEL_NAME
-        ).eval()
+        _model = AutoModel.from_pretrained(CLIP_MODEL_NAME).eval()
     return _model
 
 
-# Backward-compat aliases accessed at import time by other modules.
-# EMBEDDING_DIM is derived lazily to avoid loading the model just for the constant.
-# CLIP ViT-B/32 always exposes projection_dim=512; we hard-code it here so that
-# milvus_db.py can read EMBEDDING_DIM without triggering a full model load.
-EMBEDDING_DIM = 512
-
-
-# Keep module-level `model` and `processor` as lazy proxies so existing code
-# that does `from utils.embedding import model, processor` keeps working.
 class _LazyModel:
     def __getattr__(self, name):
         return getattr(get_model(), name)
@@ -104,6 +116,39 @@ model = _LazyModel()
 processor = _LazyProcessor()
 
 
+def _extract_model_features(output):
+    if hasattr(output, "pooler_output") and output.pooler_output is not None:
+        return output.pooler_output
+    if hasattr(output, "last_hidden_state") and output.last_hidden_state is not None:
+        return output.last_hidden_state.mean(dim=1)
+    if isinstance(output, tuple) and len(output) > 0:
+        out0 = output[0]
+        if out0.ndim == 3:
+            return out0.mean(dim=1)
+        return out0
+    raise ValueError("Unable to extract features from model output")
+
+
+def get_text_features(model_obj, text_inputs):
+    if hasattr(model_obj, "get_text_features"):
+        features = model_obj.get_text_features(**text_inputs)
+    else:
+        features = _extract_model_features(model_obj(**text_inputs))
+    if hasattr(features, "pooler_output"):
+        return features.pooler_output
+    return features
+
+
+def get_image_features(model_obj, image_inputs):
+    if hasattr(model_obj, "get_image_features"):
+        features = model_obj.get_image_features(**image_inputs)
+    else:
+        features = _extract_model_features(model_obj(**image_inputs))
+    if hasattr(features, "pooler_output"):
+        return features.pooler_output
+    return features
+
+
 def validate_video_file(video_path):
     video_path = Path(video_path)
     if not video_path.exists():
@@ -118,12 +163,6 @@ def validate_video_file(video_path):
 
 
 def read_video_frames_raw(video_file_path, segment_start, segment_end, sample_rate):
-    """
-    Read sampled frames from a video segment as raw BGR numpy arrays.
-
-    Returns a list of numpy arrays (H, W, 3) or None on error.  Callers can
-    convert to PIL or base64 as needed, avoiding duplicate video decodes.
-    """
     try:
         video_file_path = validate_video_file(video_file_path)
         cap = cv2.VideoCapture(video_file_path)
@@ -168,15 +207,11 @@ def read_video_frames_raw(video_file_path, segment_start, segment_end, sample_ra
 def read_video_frames(
     video_file_path, segment_start, segment_end, sample_rate, frame_processor
 ):
-    """
-    Legacy helper kept for backward compatibility.
-    Reads raw frames once and applies frame_processor to each.
-    """
     raw_frames = read_video_frames_raw(
         video_file_path, segment_start, segment_end, sample_rate
     )
     if not raw_frames:
-        return raw_frames  # None or []
+        return raw_frames
 
     results = []
     for frame in raw_frames:
@@ -188,17 +223,24 @@ def read_video_frames(
 
 
 def validate_annotation_output(output):
-    """Validate that LLM output strictly follows required JSON schema"""
     if not isinstance(output, dict):
         return False
 
-    for field, allowed_values in ANNOTATION_RULES.items():
+    for field in ANNOTATION_REQUIRED_FIELDS:
         if field not in output:
             return False
 
+    for field, allowed_values in ANNOTATION_RULES.items():
         field_value = str(output[field]).strip().lower()
         if field_value not in allowed_values:
             return False
+
+    if not isinstance(output.get("semantic_summary"), str):
+        return False
+
+    summary = output.get("semantic_summary", "").strip()
+    if not summary or len(summary.split()) > MAX_SEMANTIC_SUMMARY_WORDS:
+        return False
 
     return True
 
@@ -211,6 +253,10 @@ def _get_default_annotation():
         "lighting": "normal",
         "time_of_day": "unknown",
         "person_count": "0",
+        "driving_context": "unknown",
+        "road_user_density": "unknown",
+        "traffic_flow": "unknown",
+        "semantic_summary": "unknown",
     }
 
 
@@ -222,16 +268,7 @@ def annotate(
     max_retries=MAX_RETRIES,
     preloaded_frames=None,
 ):
-    """
-    Annotate a video segment using a local VLM (Ollama).
-
-    :param preloaded_frames: optional list of BGR numpy arrays already read by
-        the caller.  When provided the video file is NOT re-opened, eliminating
-        a duplicate decode.  N_VLM_FRAMES keyframes are selected from the list.
-    """
-
     def frame_to_base64(frame):
-        """Convert OpenCV frame to base64 string"""
         encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), 85]
         _, buffer = cv2.imencode(".jpg", frame, encode_param)
         return base64.b64encode(buffer).decode("utf-8")
@@ -246,7 +283,6 @@ def annotate(
     if not raw_frames:
         return _get_default_annotation()
 
-    # Select a small number of representative keyframes to reduce VLM payload.
     keyframes = select_frames(raw_frames, N_VLM_FRAMES)
     images = [frame_to_base64(f) for f in keyframes]
 
@@ -261,6 +297,9 @@ def annotate(
         + json.dumps(ANNOTATION_RULES, indent=2)
         + """
 
+        ### EXTRA RULES
+        - semantic_summary must be a concise summary (max 30 words).
+
         ### OUTPUT FORMAT (ONLY JSON, NO OTHER CONTENT)
         {
             "scene_env": "[value only from list]",
@@ -268,17 +307,11 @@ def annotate(
             "weather": "[value only from list]",
             "lighting": "[value only from list]",
             "time_of_day": "[value only from list]",
-            "person_count": "[value only from list]"
-        }
-
-        ### EXAMPLE (CORRECT OUTPUT)
-        {
-            "scene_env": "outdoor",
-            "scene_type": "street",
-            "weather": "sunny",
-            "lighting": "bright",
-            "time_of_day": "noon",
-            "person_count": "few"
+            "person_count": "[value only from list]",
+            "driving_context": "[value only from list]",
+            "road_user_density": "[value only from list]",
+            "traffic_flow": "[value only from list]",
+            "semantic_summary": "[short plain-text summary]"
         }
 
         NOW ANNOTATE THE PROVIDED IMAGES.
@@ -289,32 +322,19 @@ def annotate(
     json_schema = {
         "type": "object",
         "properties": {
-            "scene_env": {"type": "string", "enum": ANNOTATION_RULES["scene_env"]},
-            "scene_type": {"type": "string", "enum": ANNOTATION_RULES["scene_type"]},
-            "weather": {"type": "string", "enum": ANNOTATION_RULES["weather"]},
-            "lighting": {"type": "string", "enum": ANNOTATION_RULES["lighting"]},
-            "time_of_day": {"type": "string", "enum": ANNOTATION_RULES["time_of_day"]},
-            "person_count": {
-                "type": "string",
-                "enum": ANNOTATION_RULES["person_count"],
+            **{
+                k: {"type": "string", "enum": v}
+                for k, v in ANNOTATION_RULES.items()
             },
+            "semantic_summary": {"type": "string"},
         },
-        "required": [
-            "scene_env",
-            "scene_type",
-            "weather",
-            "lighting",
-            "time_of_day",
-            "person_count",
-        ],
+        "required": ANNOTATION_REQUIRED_FIELDS,
     }
     payload = {
         "model": OLLAMA_MODEL,
         "messages": [{"role": "user", "content": prompt, "images": images}],
         "stream": False,
         "format": json_schema,
-        # Disable chain-of-thought for qwen3 reasoning models so that no
-        # <think>…</think> preamble appears before the JSON output.
         "options": {"think": False},
     }
 
@@ -380,13 +400,6 @@ def generate_video_embedding(
     dim,
     preloaded_frames=None,
 ):
-    """
-    Generate a CLIP embedding for a video segment.
-
-    :param preloaded_frames: optional list of BGR numpy arrays already read by
-        the caller.  When provided the video file is NOT re-opened.
-    """
-
     def frame_to_pil(frame):
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         return Image.fromarray(rgb_frame)
@@ -411,22 +424,19 @@ def generate_video_embedding(
     frame_embeddings = []
     with torch.no_grad():
         batch_frames = select_frames(pil_frames, N_VLM_FRAMES)
-
         inputs = _processor(images=batch_frames, return_tensors="pt")
-
-        image_features = _model.get_image_features(**inputs).pooler_output
+        image_features = get_image_features(_model, inputs)
 
         normalized = image_features / image_features.norm(p=2, dim=-1, keepdim=True)
         frame_embeddings.extend(normalized.squeeze().cpu().numpy())
 
         del inputs, image_features, normalized
 
-    # Release GPU cache once after all mini-batches, not on every iteration.
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
 
     print(
-        f"Generated {len(frame_embeddings)} frame embeddings for video "
+        f"Generated {len(frame_embeddings)} frame embeddings ({EMBEDDING_MODEL_VERSION}) for "
         f"{os.path.basename(video_file_path)} "
         f"[{segment_start:.1f}s - {segment_end:.1f}s]"
     )

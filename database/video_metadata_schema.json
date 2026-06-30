@@ -3,14 +3,32 @@
   "title": "Video Segment Metadata Schema",
   "type": "object",
   "properties": {
+    "dataset_name": { "type": "string" },
+    "dataset_version": { "type": "string" },
+    "dataset_split": { "type": "string" },
+
+    "clip_id": { "type": "string" },
     "segment_id": { "type": "string" },
-    "original_video_id": { "type": "string" },
-    "start_sec": { "type": "number" },
-    "end_sec": { "type": "number" },
-    "scene_env": {
-      "type": "string",
-      "enum": ["indoor", "outdoor", "semi_outdoor"]
-    },
+    "video_file_name": { "type": "string" },
+    "video_file_path": { "type": "string" },
+
+    "scene_token": { "type": ["string", "null"] },
+    "sample_start_token": { "type": ["string", "null"] },
+    "sample_end_token": { "type": ["string", "null"] },
+
+    "camera_channel": { "type": "string", "enum": ["CAM_FRONT", "unknown"] },
+    "log_token": { "type": ["string", "null"] },
+    "location": { "type": ["string", "null"] },
+    "map_token": { "type": ["string", "null"] },
+
+    "clip_start_ts": { "type": ["integer", "null"] },
+    "clip_end_ts": { "type": ["integer", "null"] },
+    "clip_fps": { "type": ["number", "null"] },
+    "clip_frame_count": { "type": ["integer", "null"] },
+    "segment_start": { "type": "number" },
+    "segment_end": { "type": "number" },
+
+    "scene_env": { "type": "string", "enum": ["indoor", "outdoor", "semi_outdoor", "unknown"] },
     "scene_type": {
       "type": "string",
       "enum": [
@@ -19,26 +37,48 @@
         "mall", "parking", "underpass", "other"
       ]
     },
-    "weather": {
-      "type": "string",
-      "enum": ["sunny", "cloudy", "rainy", "foggy", "snowy", "unknown"]
-    },
-    "lighting": {
-      "type": "string",
-      "enum": ["bright", "normal", "dim", "indoor_light"]
-    },
-    "time_of_day": {
-      "type": "string",
-      "enum": ["dawn", "morning", "noon", "afternoon", "dusk", "night", "unknown"]
-    },
-    "person_count": {
-      "type": "string",
-      "enum": ["0", "single", "few", "crowd"]
-    }
+    "weather": { "type": "string", "enum": ["sunny", "cloudy", "rainy", "foggy", "snowy", "unknown"] },
+    "lighting": { "type": "string", "enum": ["bright", "normal", "dim", "indoor_light"] },
+    "time_of_day": { "type": "string", "enum": ["dawn", "morning", "noon", "afternoon", "dusk", "night", "unknown"] },
+    "person_count": { "type": "string", "enum": ["0", "single", "few", "crowd"] },
+
+    "driving_context": { "type": "string", "enum": ["city_driving", "highway", "intersection", "parking_lot", "residential", "unknown"] },
+    "road_user_density": { "type": "string", "enum": ["empty", "sparse", "moderate", "dense", "unknown"] },
+    "traffic_flow": { "type": "string", "enum": ["free_flow", "slow", "congested", "stopped", "unknown"] },
+    "semantic_summary": { "type": "string" },
+
+    "embedding_model": { "type": "string" },
+    "annotation_model": { "type": "string" },
+    "processing_ts": { "type": "string" },
+    "quality_flag": { "type": "string", "enum": ["ok", "warning", "error"] },
+
+    "ego_avg_speed_mps": { "type": ["number", "null"] },
+    "ego_max_speed_mps": { "type": ["number", "null"] }
   },
   "required": [
-    "video_file_name", "video_file_path", "segment_id", 
-    "scene_env", "scene_type", "weather", "lighting", 
-    "time_of_day", "person_count"
+    "dataset_name",
+    "dataset_version",
+    "dataset_split",
+    "clip_id",
+    "segment_id",
+    "video_file_name",
+    "video_file_path",
+    "camera_channel",
+    "segment_start",
+    "segment_end",
+    "scene_env",
+    "scene_type",
+    "weather",
+    "lighting",
+    "time_of_day",
+    "person_count",
+    "driving_context",
+    "road_user_density",
+    "traffic_flow",
+    "semantic_summary",
+    "embedding_model",
+    "annotation_model",
+    "processing_ts",
+    "quality_flag"
   ]
 }
