@@ -73,6 +73,8 @@ ANNOTATION_RULES = {
     "road_user_density": ["empty", "sparse", "moderate", "dense", "unknown"],
     "traffic_flow": ["free_flow", "slow", "congested", "stopped", "unknown"],
 }
+ANNOTATION_REQUIRED_FIELDS = list(ANNOTATION_RULES.keys()) + ["semantic_summary"]
+MAX_SEMANTIC_SUMMARY_WORDS = 30
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -224,8 +226,7 @@ def validate_annotation_output(output):
     if not isinstance(output, dict):
         return False
 
-    required_fields = list(ANNOTATION_RULES.keys()) + ["semantic_summary"]
-    for field in required_fields:
+    for field in ANNOTATION_REQUIRED_FIELDS:
         if field not in output:
             return False
 
@@ -235,6 +236,10 @@ def validate_annotation_output(output):
             return False
 
     if not isinstance(output.get("semantic_summary"), str):
+        return False
+
+    summary = output.get("semantic_summary", "").strip()
+    if not summary or len(summary.split()) > MAX_SEMANTIC_SUMMARY_WORDS:
         return False
 
     return True
@@ -293,7 +298,7 @@ def annotate(
         + """
 
         ### EXTRA RULES
-        - semantic_summary must be a concise single-sentence summary (max 30 words).
+        - semantic_summary must be a concise summary (max 30 words).
 
         ### OUTPUT FORMAT (ONLY JSON, NO OTHER CONTENT)
         {
@@ -323,7 +328,7 @@ def annotate(
             },
             "semantic_summary": {"type": "string"},
         },
-        "required": list(ANNOTATION_RULES.keys()) + ["semantic_summary"],
+        "required": ANNOTATION_REQUIRED_FIELDS,
     }
     payload = {
         "model": OLLAMA_MODEL,

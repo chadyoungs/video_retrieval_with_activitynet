@@ -4,7 +4,7 @@ from pathlib import Path
 
 sys.path.append(str(Path(__file__).parent))
 
-from typing import Dict, List, Optional
+from typing import Dict, List
 
 import torch
 from PIL import Image
@@ -54,15 +54,6 @@ def get_image_embedding(query_img_path: str) -> List[float]:
     return normalize_feature(img_features)
 
 
-def _passes_metadata_filters(hit: Dict, metadata_filters: Optional[Dict]) -> bool:
-    if not metadata_filters:
-        return True
-    for key, value in metadata_filters.items():
-        if hit.get(key) != value:
-            return False
-    return True
-
-
 def hybrid_retrieval(
     query_embedding: List[float],
     annotation_conditions: Dict = None,
@@ -92,8 +83,6 @@ def hybrid_retrieval(
     result_map = {}
 
     for hit in milvus_hits:
-        if not _passes_metadata_filters(hit, metadata_filters):
-            continue
         key = f"{hit['video_file_name']}_{hit['segment_start']}"
         result_map[key] = {
             **hit,
@@ -103,8 +92,6 @@ def hybrid_retrieval(
         }
 
     for hit in sql_hits:
-        if not _passes_metadata_filters(hit, metadata_filters):
-            continue
         key = f"{hit['video_file_name']}_{hit['segment_start']}"
         if key in result_map:
             result_map[key]["sql_score"] = hit["score"]

@@ -43,6 +43,10 @@ def video_start_end_generator(video_file, clip_duration):
     cap.release()
 
     if fps <= 0 or total_frames <= 0:
+        print(
+            f"Warning: Invalid video properties for {video_file}: "
+            f"fps={fps}, total_frames={total_frames}"
+        )
         return [], []
 
     video_duration = total_frames / fps

@@ -91,6 +91,10 @@ def init_db():
     for col in ALLOWED_FILTER_FIELDS:
         c.execute(f"CREATE INDEX IF NOT EXISTS idx_{col} ON video_clips({col})")
     c.execute("CREATE INDEX IF NOT EXISTS idx_video_segment ON video_clips(video_file_name, segment_start)")
+    c.execute(
+        "CREATE INDEX IF NOT EXISTS idx_dataset_camera_scene "
+        "ON video_clips(dataset_name, camera_channel, scene_token)"
+    )
     conn.commit()
     conn.close()
 

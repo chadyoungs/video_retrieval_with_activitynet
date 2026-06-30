@@ -123,7 +123,7 @@ def generate_nuscenes_front_videos(
             continue
 
         width, height = size
-        clip_id = f"{scene_name}_{scene_token[:8]}_cam_front"
+        clip_id = f"{scene_name}_{scene_token[:8]}_CAM_FRONT"
         clip_file_name = f"{clip_id}.mp4"
         clip_path = output_dir_path / clip_file_name
 
