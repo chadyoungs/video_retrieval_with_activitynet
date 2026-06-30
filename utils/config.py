@@ -60,3 +60,6 @@ NUM_PROCESSES = 2  # parallel video workers, local model can't handle >2 process
 # Sending 4 keyframes instead of all sampled frames dramatically reduces VLM
 # input size while preserving annotation quality.
 N_VLM_FRAMES = 4
+
+# Number of candidate segments to retrieve before VLM reranking.
+RERANKER_CANDIDATES = 10

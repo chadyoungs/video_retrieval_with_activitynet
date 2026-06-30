@@ -11,8 +11,9 @@ from PIL import Image
 
 from database.milvus_db import get_milvus_client, search_milvus
 from database.sql_db import search_sql
-from utils.config import MILVUS_HOST, MILVUS_PORT
+from utils.config import MILVUS_HOST, MILVUS_PORT, RERANKER_CANDIDATES
 from utils.embedding import get_image_features, get_model, get_processor, get_text_features
+from utils.reranker import rerank_results
 
 try:
     client = get_milvus_client()
@@ -118,6 +119,7 @@ def retrieval_with_text(
     annotation_conditions: Dict = None,
     metadata_filters: Dict = None,
     limit: int = 5,
+    rerank: bool = False,
 ) -> List[Dict]:
     print(f"\n=== Hybrid Text Retrieval for: '{query_text}' ===")
     print(f"SQL annotation conditions: {annotation_conditions or 'None'}")
@@ -125,25 +127,48 @@ def retrieval_with_text(
 
     text_embedding = get_text_embedding(query_text)
 
+    # Retrieve a larger candidate pool when reranking is enabled.
+    candidate_limit = max(RERANKER_CANDIDATES, limit) if rerank else limit
+
     hybrid_results = hybrid_retrieval(
         query_embedding=text_embedding,
         annotation_conditions=annotation_conditions,
         metadata_filters=metadata_filters,
-        milvus_limit=limit * 2,
-        sql_limit=limit * 2,
-    )[:limit]
+        milvus_limit=candidate_limit * 2,
+        sql_limit=candidate_limit * 2,
+    )[:candidate_limit]
 
-    print("--- Top Retrieval Results ---")
-    for idx, res in enumerate(hybrid_results, 1):
-        print(f"\nRank {idx}:")
-        print(f"  Video: {res['video_file_path']}/{res['video_file_name']}")
-        print(f"  Segment: {res['segment_start']}s - {res['segment_end']}s")
-        print(f"  Dataset: {res.get('dataset_name', 'unknown')}")
-        print(f"  Camera: {res.get('camera_channel', 'unknown')}")
-        print(f"  Milvus Score: {res['milvus_score']:.4f}")
-        print(f"  SQL Score: {res['sql_score']:.4f}")
-        print(f"  Final Score: {res['final_score']:.4f}")
-        print(f"  Distance (Milvus): {res.get('distance', 'N/A'):.4f}")
+    if rerank:
+        print(f"\n--- Reranking top-{len(hybrid_results)} candidates with VLM ---")
+        hybrid_results = rerank_results(
+            candidates=hybrid_results,
+            query_text=query_text,
+            top_k=limit,
+        )
+        print("\n--- Top Reranked Results ---")
+        for idx, res in enumerate(hybrid_results, 1):
+            print(f"\nRank {idx}:")
+            print(f"  Video: {res['video_file_path']}/{res['video_file_name']}")
+            print(f"  Segment: {res['segment_start']}s - {res['segment_end']}s")
+            print(f"  Dataset: {res.get('dataset_name', 'unknown')}")
+            print(f"  Camera: {res.get('camera_channel', 'unknown')}")
+            print(f"  Rerank Score: {res['rerank_score']}/10")
+            print(f"  Rerank Reason: {res['rerank_reason']}")
+            print(f"  Milvus Score: {res['milvus_score']:.4f}")
+            print(f"  SQL Score: {res['sql_score']:.4f}")
+            print(f"  Final Score: {res['final_score']:.4f}")
+    else:
+        print("--- Top Retrieval Results ---")
+        for idx, res in enumerate(hybrid_results, 1):
+            print(f"\nRank {idx}:")
+            print(f"  Video: {res['video_file_path']}/{res['video_file_name']}")
+            print(f"  Segment: {res['segment_start']}s - {res['segment_end']}s")
+            print(f"  Dataset: {res.get('dataset_name', 'unknown')}")
+            print(f"  Camera: {res.get('camera_channel', 'unknown')}")
+            print(f"  Milvus Score: {res['milvus_score']:.4f}")
+            print(f"  SQL Score: {res['sql_score']:.4f}")
+            print(f"  Final Score: {res['final_score']:.4f}")
+            print(f"  Distance (Milvus): {res.get('distance', 'N/A'):.4f}")
 
     return hybrid_results
 
@@ -153,6 +178,7 @@ def retrieval_with_image(
     annotation_conditions: Dict = None,
     metadata_filters: Dict = None,
     limit: int = 5,
+    rerank: bool = False,
 ) -> List[Dict]:
     if not os.path.exists(query_img_path):
         print(f"Error: Image file not found - {query_img_path}")
@@ -164,24 +190,47 @@ def retrieval_with_image(
 
     img_embedding = get_image_embedding(query_img_path)
 
+    # Retrieve a larger candidate pool when reranking is enabled.
+    candidate_limit = max(RERANKER_CANDIDATES, limit) if rerank else limit
+
     hybrid_results = hybrid_retrieval(
         query_embedding=img_embedding,
         annotation_conditions=annotation_conditions,
         metadata_filters=metadata_filters,
-        milvus_limit=limit * 2,
-        sql_limit=limit * 2,
-    )[:limit]
+        milvus_limit=candidate_limit * 2,
+        sql_limit=candidate_limit * 2,
+    )[:candidate_limit]
 
-    print("--- Top Retrieval Results ---")
-    for idx, res in enumerate(hybrid_results, 1):
-        print(f"\nRank {idx}:")
-        print(f"  Video: {res['video_file_path']}/{res['video_file_name']}")
-        print(f"  Segment: {res['segment_start']}s - {res['segment_end']}s")
-        print(f"  Dataset: {res.get('dataset_name', 'unknown')}")
-        print(f"  Camera: {res.get('camera_channel', 'unknown')}")
-        print(f"  Milvus Score: {res['milvus_score']:.4f}")
-        print(f"  SQL Score: {res['sql_score']:.4f}")
-        print(f"  Final Score: {res['final_score']:.4f}")
+    if rerank:
+        print(f"\n--- Reranking top-{len(hybrid_results)} candidates with VLM ---")
+        hybrid_results = rerank_results(
+            candidates=hybrid_results,
+            query_image_path=query_img_path,
+            top_k=limit,
+        )
+        print("\n--- Top Reranked Results ---")
+        for idx, res in enumerate(hybrid_results, 1):
+            print(f"\nRank {idx}:")
+            print(f"  Video: {res['video_file_path']}/{res['video_file_name']}")
+            print(f"  Segment: {res['segment_start']}s - {res['segment_end']}s")
+            print(f"  Dataset: {res.get('dataset_name', 'unknown')}")
+            print(f"  Camera: {res.get('camera_channel', 'unknown')}")
+            print(f"  Rerank Score: {res['rerank_score']}/10")
+            print(f"  Rerank Reason: {res['rerank_reason']}")
+            print(f"  Milvus Score: {res['milvus_score']:.4f}")
+            print(f"  SQL Score: {res['sql_score']:.4f}")
+            print(f"  Final Score: {res['final_score']:.4f}")
+    else:
+        print("--- Top Retrieval Results ---")
+        for idx, res in enumerate(hybrid_results, 1):
+            print(f"\nRank {idx}:")
+            print(f"  Video: {res['video_file_path']}/{res['video_file_name']}")
+            print(f"  Segment: {res['segment_start']}s - {res['segment_end']}s")
+            print(f"  Dataset: {res.get('dataset_name', 'unknown')}")
+            print(f"  Camera: {res.get('camera_channel', 'unknown')}")
+            print(f"  Milvus Score: {res['milvus_score']:.4f}")
+            print(f"  SQL Score: {res['sql_score']:.4f}")
+            print(f"  Final Score: {res['final_score']:.4f}")
 
     return hybrid_results
 
@@ -198,6 +247,7 @@ if __name__ == "__main__":
             annotation_conditions=annotation_conditions,
             metadata_filters=metadata_filters,
             limit=5,
+            rerank=True,
         )
     elif option == "image":
         query_img = os.path.join(
@@ -209,4 +259,5 @@ if __name__ == "__main__":
             annotation_conditions={"scene_env": "outdoor", "lighting": "bright"},
             metadata_filters={"dataset_name": "activitynet"},
             limit=5,
+            rerank=True,
         )
