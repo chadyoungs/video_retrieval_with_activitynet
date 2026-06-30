@@ -92,7 +92,7 @@ def _build_filter_expression(metadata_filters: dict):
     for key, value in metadata_filters.items():
         if key not in allowed_fields:
             continue
-        if not re.match(r"^[\\w\\-.:/ ]+$", str(value)):
+        if not re.match(r"^[\w\-.:/ ]+$", str(value)):
             continue
         safe_value = str(value).replace("\\", "\\\\").replace("'", "\\'")
         clauses.append(f"{key} == '{safe_value}'")
